@@ -29,6 +29,8 @@ export const api = {
   ) => invoke<void>("set_hit_rects", { rects, panelH, scrollable }),
   showRope: () => invoke<void>("show_rope"),
   hideRope: () => invoke<void>("hide_rope"),
+  activateApp: () => invoke<void>("activate_app"),
   makeThumb: (path: string, maxPx: number) =>
     invoke<ThumbInfo>("make_thumb", { path, maxPx }),
+  requestMacPermission: () => invoke<boolean>("request_mac_permission"),
 };

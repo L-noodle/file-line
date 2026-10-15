@@ -13,6 +13,7 @@
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:window:allow-set-focus",
+    "core:window:allow-theme",
     "core:event:default",
     "core:webview:default",
     "drag:default",

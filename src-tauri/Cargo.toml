@@ -41,5 +41,15 @@ windows = { version = "0.61", features = [
   "Win32_System_LibraryLoader",
 ] }
 
+[target."cfg(target_os = \"macos\")".dependencies]
+# macOS 原生调用（NSPasteboard / NSEvent）仅用 objc 直接 FFI，无需额外框架链接
+objc = "0.2"
+
+# objc 0.2 的 msg_send! 宏展开内部用 cfg(feature = "cargo-clippy") 检测 clippy 运行，
+# 该 crate 自身未声明此 feature，Rust 1.80+ 的 unexpected_cfgs lint 会对每次宏调用报警告
+# （本项目 macOS 侧大量 msg_send! 调用，噪声数十条）。在此声明为已知合法值，消除噪声。
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
 [profile.dev]
 incremental = true

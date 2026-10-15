@@ -14,6 +14,7 @@ import { api } from "./api";
 import {
   cardWidth,
   dockScale,
+  DOCK_MAX,
   DOCK_RANGE,
   panelHeight,
   photoMaxHeight,
@@ -27,15 +28,24 @@ import {
   visibleX,
 } from "./layout";
 import { invoke } from "@tauri-apps/api/core";
+import { useTheme } from "./theme";
 
 let seq = 1;
 const nextId = () => `i${seq++}`;
+
+// 运行时平台判断：Windows 的彩虹渐变由 native-drop（OLE）驱动，macOS 由 Tauri 跨平台
+// 拖放事件驱动。用 IS_MAC 把 onDragDropEvent 里的 dragHover 逻辑物理隔离到 macOS，
+// 确保 Windows 行为完全不受影响（不引入原生插件，避免动 capabilities / 权限）。
+const IS_MAC =
+  typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent || "");
 
 // 使用说明弹窗矩形（窗口逻辑坐标）。弹窗打开时窗口临时全屏化，
 // 弹窗可全屏随意拖动；该矩形作为点击命中区上报（弹窗外保持穿透）
 type HelpRect = { x: number; y: number; w: number; h: number };
 
 export default function App() {
+  // 跟踪系统（Windows / macOS）明暗主题，写入 <html data-theme> 驱动全部暗色样式
+  useTheme();
   const [items, setItems] = useState<Item[]>([]);
   const [size, setSize] = useState<SizeKey>("small");
   const [revealed, setRevealed] = useState(false);
@@ -56,6 +66,8 @@ export default function App() {
   const zoneBottomRef = useRef(0); // 卡片感应区底部 y（低于此不触发放大）
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef(0);
+  // macOS 未授予「辅助功能 / 输入监控」权限时，精细点击穿透不可用，提示用户授权
+  const [macDenied, setMacDenied] = useState(false);
   const menuRef = useRef<MenuState | null>(null);
   menuRef.current = menu;
   const helpOpenRef = useRef(false);
@@ -117,6 +129,21 @@ export default function App() {
     toastTimer.current = window.setTimeout(() => setToast(null), 2200);
   }, []);
 
+  // macOS 授权入口：弹出系统授权框；授权成功后精细穿透即时生效
+  const requestMacPermission = useCallback(() => {
+    api
+      .requestMacPermission()
+      .then((ok) => {
+        if (ok) {
+          setMacDenied(false);
+          showToast("已授权，点击穿透到下方窗口已启用");
+        } else {
+          showToast("请在系统设置中授权后重启晾衣绳生效");
+        }
+      })
+      .catch(() => {});
+  }, [showToast]);
+
   const itemsRef = useRef<Item[]>([]);
   itemsRef.current = items;
 
@@ -170,11 +197,25 @@ export default function App() {
       reveal();
       setHelpOpen(true);
     });
-    // 鼠标进入 / 离开面板区域（驱动闲置隐藏）
+    // macOS 未授权：提示开启精细点击穿透（点击/拖动微信等下方窗口不再被遮挡）
+    const un9 = listen("mac-tap-denied", () => setMacDenied(true));
+    // 鼠标进入 / 离开面板区域（驱动闲置隐藏 + macOS 预激活）
     const un6 = listen<boolean>("panel-hover", (e) => {
       hoverRef.current = !!e.payload;
-      if (hoverRef.current) cancelHide();
-      else scheduleHide();
+      if (hoverRef.current) {
+        cancelHide();
+        // 预激活：macOS 原生拖拽会话（startDrag）硬性要求应用为前台/frontmost，
+        // 而悬浮穿透窗默认 focus:false、穿透态切换有 ~60ms 轮询延迟，若等
+        // pointerdown 才激活，首按的 pointer 序列常丢失、startDrag 起不来，
+        // 表现为「必须先点一下聚焦窗口才能拖动卡片」。
+        // 收到 panel-hover=true 时穿透已先一步切为非穿透（Capture 先于 Hover 入队），
+        // webview 能稳定收到鼠标事件；此刻提前激活，到用户按下时应用已是前台，
+        // 拖拽立即可起。仅在绳子已显示时（用户唤出准备交互），避免闲置态鼠标
+        // 掠过抢夺键盘焦点。激活为幂等操作，已前台时无副作用。
+        if (IS_MAC && revealedRef.current) api.activateApp().catch(() => {});
+      } else {
+        scheduleHide();
+      }
     });
     // 卡片拖拽进行中：不自动隐藏
     const onDragStart = () => {
@@ -192,14 +233,25 @@ export default function App() {
     const un4 = getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === "enter") {
         wiggleDone = false;
-      } else if (e.payload.type === "over" && !wiggleDone) {
-        wiggleDone = true;
-        window.dispatchEvent(new CustomEvent("rope-wiggle"));
+        // macOS 没有 Windows 的 OLE 原生拖入事件（native-drop），
+        // 彩虹流动反馈改由 Tauri 跨平台拖放事件驱动（仅 macOS）
+        if (IS_MAC) {
+          setDragHover(true);
+          cancelHide();
+        }
+      } else if (e.payload.type === "over") {
+        if (!wiggleDone) {
+          wiggleDone = true;
+          window.dispatchEvent(new CustomEvent("rope-wiggle"));
+        }
+        if (IS_MAC) setDragHover(true);
       } else if (e.payload.type === "drop") {
         addPaths(e.payload.paths, "drag");
+        if (IS_MAC) setDragHover(false);
         reveal();
       } else if (e.payload.type === "leave") {
         wiggleDone = false;
+        if (IS_MAC) setDragHover(false);
       }
     });
     const onResize = () => setWidth(window.innerWidth);
@@ -245,6 +297,7 @@ export default function App() {
       un6.then((f) => f());
       un7.then((f) => f());
       un8.then((f) => f());
+      un9.then((f) => f());
       window.removeEventListener("card-drag-start", onDragStart);
       window.removeEventListener("card-drag-end", onDragEnd);
       window.removeEventListener("resize", onResize);
@@ -582,18 +635,22 @@ export default function App() {
     const ph = photoMaxHeight(size);
     const rects: [number, number, number, number][] = [];
     if (revealed) {
+      // 命中区必须覆盖卡片的「最大可见轮廓」：Dock 放大（以挂点为原点 ×DOCK_MAX）
+      // + 风中摆动的外扩 + 少量接近余量。按静止原始尺寸算的话，鼠标压在放大/摆动
+      // 出来的卡片边缘上会被判为卡片外，事件就穿透到下面的窗口去了。
+      // 卡片区之外仍保持穿透（条带空白不吞鼠标）。
+      const cardW = cw * DOCK_MAX + 16;
+      const cardH = (26 + ph + 18) * DOCK_MAX + 14;
       for (const v of visibleItems) {
         const cx = visibleX(v.i, visCount, width, size) - shiftPx;
         const y = ropeY(cx, width) - PIN_ABOVE;
-        // 贴合卡片实际 DOM：衣夹 26px + 卡片约 ph+8，只留少量 hover 放大余量，
-        // 避免吞掉卡片下方/两侧的鼠标事件（桌面内容保持正常 hover）
-        rects.push([cx - cw / 2 - 3, y, cw + 6, 26 + ph + 18]);
+        rects.push([cx - cardW / 2, y - 4, cardW, cardH]);
       }
       if (folded.length > 0) {
-        rects.push([fanX - (cw + 16) / 2, 18, cw + 16, ph + 66]);
+        rects.push([fanX - (cw + 16) / 2, 14, cw + 16, ph + 70]);
       }
       if (foldedRight.length > 0) {
-        rects.push([fanXRight - (cw + 16) / 2, 18, cw + 16, ph + 66]);
+        rects.push([fanXRight - (cw + 16) / 2, 14, cw + 16, ph + 70]);
       }
       if (items.length === 0) {
         // 空绳装饰：中间夹着的小图
@@ -725,6 +782,20 @@ export default function App() {
         />
       )}
       {toast && <div className="toast glass-strong">{toast}</div>}
+      {macDenied && (
+        <div className="perm-notice glass-strong">
+          <span className="perm-text">
+            为支持点击穿透到下方窗口（如微信），请在系统设置 → 隐私与安全性 →
+            输入监控 / 辅助功能 中授权「晾衣绳」
+          </span>
+          <button className="perm-btn" onClick={requestMacPermission}>
+            去授权
+          </button>
+          <button className="perm-btn ghost" onClick={() => setMacDenied(false)}>
+            忽略
+          </button>
+        </div>
+      )}
     </div>
   );
 }

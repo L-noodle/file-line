@@ -196,6 +196,7 @@ fn file_icon_thumb(app: &AppHandle, name: &str) -> Option<Thumb> {
 }
 
 /// 提取 exe 内嵌图标（32px 大图标），失败返回 None（回退 exe.png）。
+#[cfg(windows)]
 fn exe_icon_thumb(app: &AppHandle, path: &str) -> Option<Thumb> {
     let png = unsafe { exe_icon_png(path) }?;
     let (w, h) = image::load_from_memory(&png)
@@ -215,6 +216,7 @@ fn exe_icon_thumb(app: &AppHandle, path: &str) -> Option<Thumb> {
     })
 }
 
+#[cfg(windows)]
 unsafe fn exe_icon_png(path: &str) -> Option<Vec<u8>> {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
@@ -239,6 +241,7 @@ unsafe fn exe_icon_png(path: &str) -> Option<Vec<u8>> {
 }
 
 /// HICON → PNG 字节（32bpp BGRA top-down 取回后转 RGBA）。
+#[cfg(windows)]
 unsafe fn hicon_to_png(hicon: windows::Win32::UI::WindowsAndMessaging::HICON) -> Option<Vec<u8>> {
     use windows::Win32::Graphics::Gdi::{
         GetDC, ReleaseDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO,
@@ -365,7 +368,8 @@ fn build_thumb(app: &AppHandle, path: &str, max_px: u32, is_dir: bool) -> Result
             return Ok(t);
         }
     }
-    // exe 优先显示程序内嵌图标，提取失败回退类型图标
+    // exe 优先显示程序内嵌图标，提取失败回退类型图标（仅 Windows 有 exe）
+    #[cfg(windows)]
     if ext == "exe" {
         if let Some(t) = exe_icon_thumb(app, path) {
             return Ok(t);

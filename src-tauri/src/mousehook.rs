@@ -1,6 +1,11 @@
-//! 低级鼠标钩子：动态切换窗口点击穿透 + 悬停事件 + 顶部拖拽检测。
+//! 动态切换窗口点击穿透 + 悬停事件 + 顶部拖拽检测。
 //! 卡片命中区内可交互；其余全穿透（条带空白不吞鼠标，桌面内容正常 hover）。
+//!
+//! - Windows：全局低级鼠标钩子（WH_MOUSE_LL）+ 消息泵，外加轮询线程做顶部触发。
+//! - macOS：NSEvent 轮询（mouseLocation / pressedMouseButtons），无需辅助功能权限，
+//!   等价于 Windows 的轮询线程，并据此切换点击穿透。
 
+use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
@@ -20,6 +25,9 @@ struct Regions {
     rects: Vec<Rect>,
     panel_h: f64,
     win_w: f64,
+    // Windows 路径做物理→逻辑坐标转换时读取（r.scale）；macOS 光标坐标已是逻辑点，
+    // 不读。结构体跨平台赋值（set_hit_rects），无法用 cfg 守卫字段本身，故仅抑制非 Windows 的 dead_code。
+    #[cfg_attr(not(windows), allow(dead_code))]
     scale: f64,
     /// 有折叠堆叠（滚轮可滚动可见窗口）
     scrollable: bool,
@@ -51,6 +59,13 @@ enum Msg {
     Mouse { pos: Option<(f64, f64)> },
 }
 static TX: OnceLock<Sender<Msg>> = OnceLock::new();
+
+/// 往应用线程发消息（窗口穿透切换 / 事件转发都走这里，避免在非主线程直接操作窗口）。
+fn tx_send(msg: Msg) {
+    if let Some(tx) = TX.get() {
+        let _ = tx.send(msg);
+    }
+}
 
 /// 上次转发给前端的条带内鼠标位置（节流：移动 ≥1 逻辑像素或进出条带才发）
 static LAST_MOUSE: Mutex<Option<(f64, f64)>> = Mutex::new(None);
@@ -124,18 +139,12 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// 前台线程是否处于窗口移动/缩放模态循环（正在拖动标题栏/窗口边缘）。
-/// 拖动窗口经过屏幕顶部（含 Windows 贴边分屏手势）时不应唤出晾衣绳；
-/// 拖拽文件（OLE）不会进入该循环，两者由此区分。
-fn fg_in_move_size() -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetGUIThreadInfo, GUITHREADINFO, GUI_INMOVESIZE,
-    };
-    let mut info = GUITHREADINFO::default();
-    info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
-    unsafe { GetGUIThreadInfo(0, &mut info).is_ok() && (info.flags & GUI_INMOVESIZE).0 != 0 }
+fn in_rect(px: f64, py: f64, r: &Rect) -> bool {
+    px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h
 }
 
+/// 启动：应用线程（穿透切换 + 事件转发）始终运行；
+/// 平台特定的全局鼠标监听分别在 Windows / macOS 中实现。
 pub fn start(app: AppHandle) {
     let (tx, rx) = mpsc::channel::<Msg>();
     let _ = TX.set(tx);
@@ -152,15 +161,12 @@ pub fn start(app: AppHandle) {
                         }
                     }
                     Msg::Hover(inside) => {
-                        // 窗口隐藏时 hover 无意义，但前端会自行忽略；这里直接转发
                         let _ = app.emit("panel-hover", inside);
                     }
                     Msg::Wheel { dx, dy } => {
-                        // 条带区域内的滚轮穿透捕获：转发给前端滚动卡片
                         let _ = app.emit("panel-wheel", (dx, dy));
                     }
                     Msg::Mouse { pos } => {
-                        // 条带内鼠标位置：前端据此做 Dock 式邻近放大联动
                         let _ = app.emit("panel-mouse", pos);
                     }
                 }
@@ -168,6 +174,18 @@ pub fn start(app: AppHandle) {
         });
     }
 
+    #[cfg(windows)]
+    start_windows(app);
+    #[cfg(target_os = "macos")]
+    start_macos(app);
+}
+
+// ======================================================================
+// Windows：全局 LL 钩子 + 轮询线程
+// ======================================================================
+
+#[cfg(windows)]
+fn start_windows(app: AppHandle) {
     // 顶部触发检测线程：主动轮询光标位置与左键状态，而非依赖鼠标消息驱动。
     // 光标贴屏幕最顶端静止时消息流可能中断（坐标钳位/注入过滤等），
     // 轮询保证悬停 0.5s / 拖拽 0.3s 计时稳定进行。
@@ -228,8 +246,6 @@ pub fn start(app: AppHandle) {
                 }
 
                 // 顶部悬停状态机（无需按键，按住左键/拖动窗口时交给拖拽状态机）
-                // 注意用真实按键状态 lbutton：拖动窗口时 left_down 已被置 false，
-                // 若用 !left_down 会让悬停计时误启动
                 if !lbutton && hover_zone {
                     if HOVER_SINCE.load(Ordering::SeqCst) == 0 {
                         HOVER_SINCE.store(now_ms(), Ordering::SeqCst);
@@ -243,8 +259,6 @@ pub fn start(app: AppHandle) {
 
                 if !TOP_SHOWN.load(Ordering::SeqCst) && TOP_ACTIVE.load(Ordering::SeqCst) {
                     let since = TOP_SINCE.load(Ordering::SeqCst);
-                    // 拖文件进顶部是明确意图：停留 150ms 即唤出，
-                    // 缩短"窗口还在显示中就松手导致 drop 落空"的时间窗
                     if since > 0 && now_ms().saturating_sub(since) >= 150 {
                         if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
                             let _ = app.emit("show-rope", ());
@@ -281,10 +295,20 @@ pub fn start(app: AppHandle) {
     });
 }
 
-fn in_rect(px: f64, py: f64, r: &Rect) -> bool {
-    px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h
+/// 前台线程是否处于窗口移动/缩放模态循环（正在拖动标题栏/窗口边缘）。
+/// 拖动窗口经过屏幕顶部（含 Windows 贴边分屏手势）时不应唤出晾衣绳；
+/// 拖拽文件（OLE）不会进入该循环，两者由此区分。
+#[cfg(windows)]
+fn fg_in_move_size() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetGUIThreadInfo, GUITHREADINFO, GUI_INMOVESIZE,
+    };
+    let mut info = GUITHREADINFO::default();
+    info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+    unsafe { GetGUIThreadInfo(0, &mut info).is_ok() && (info.flags & GUI_INMOVESIZE).0 != 0 }
 }
 
+#[cfg(windows)]
 unsafe extern "system" fn hook_proc(
     code: i32,
     wparam: windows::Win32::Foundation::WPARAM,
@@ -299,8 +323,9 @@ unsafe extern "system" fn hook_proc(
         let injected = (info.flags & LLMHF_INJECTED) != 0;
         let msg = wparam.0 as u32;
 
-        // 滚轮（WM_MOUSEWHEEL / WM_MOUSEHWHEEL）：面板显示且有堆叠时，
-        // 条带区域内滚轮由本应用消费并转发前端，不穿透到底下的桌面窗口
+        // 滚轮（WM_MOUSEWHEEL / WM_MOUSEHWHEEL）：面板显示时，条带内可滚动，
+        // 或光标正压在卡片上（卡片接管全部事件）→ 由本应用消费并转发前端，
+        // 不穿透到底下的桌面窗口，避免下方的页面/列表跟着滚
         if !injected && (msg == 0x020A || msg == 0x020B) {
             let wheel = {
                 let guard = REGIONS.lock().unwrap();
@@ -308,9 +333,8 @@ unsafe extern "system" fn hook_proc(
                     let (lx, ly) = (info.pt.x as f64 / r.scale, info.pt.y as f64 / r.scale);
                     let in_win =
                         ly >= 0.0 && ly <= r.panel_h && lx >= 0.0 && lx <= r.win_w;
-                    if in_win && r.scrollable && REVEALED.load(Ordering::SeqCst) {
-                        // mouseData 高 16 位为有符号 delta；正 = 向上/向右，
-                        // 映射到前端 WheelEvent 的 deltaY / deltaX 方向
+                    let on_card = r.rects.iter().any(|rc| in_rect(lx, ly, rc));
+                    if in_win && (r.scrollable || on_card) && REVEALED.load(Ordering::SeqCst) {
                         let delta = ((info.mouseData >> 16) & 0xFFFF) as u16 as i16 as i32;
                         Some(if msg == 0x020A { (0, -delta) } else { (delta, 0) })
                     } else {
@@ -377,7 +401,7 @@ unsafe extern "system" fn hook_proc(
                     (Some((x0, y0)), Some((x1, y1))) => {
                         (x1 - x0).abs() >= 1.0 || (y1 - y0).abs() >= 1.0
                     }
-                    _ => true, // 进出条带的沿变化必发
+                    _ => true,
                 };
                 if changed {
                     *last = mouse_pos;
@@ -392,4 +416,514 @@ unsafe extern "system" fn hook_proc(
         }
     }
     CallNextHookEx(None, code, wparam, lparam)
+}
+
+// ======================================================================
+// macOS：NSEvent 轮询（mouseLocation / pressedMouseButtons）
+// ======================================================================
+
+#[cfg(target_os = "macos")]
+static APP: OnceLock<AppHandle> = OnceLock::new();
+#[cfg(target_os = "macos")]
+static TAP_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+fn start_macos(app: AppHandle) {
+    let _ = APP.set(app.clone());
+    // 优先用 CGEventTap 做精细穿透（事件分发前判断命中区，仅卡片截点击，
+    // 其余透传下方窗口，对齐 Windows）。需要「辅助功能 / 输入监控」授权；
+    // 未授权时回退到轮询粗粒度方案，并通过事件提示用户去授权。
+    if ensure_tap(&app) {
+        return;
+    }
+    let _ = app.emit("mac-tap-denied", ());
+    start_macos_poll(app);
+}
+
+/// 未获授权时的粗粒度回退方案（保留原行为：面板显示时整条面板不可穿透）。
+#[cfg(target_os = "macos")]
+fn start_macos_poll(app: AppHandle) {
+    std::thread::spawn(move || unsafe {
+        loop {
+            // 后续授权生效：退出轮询，改由 CGEventTap 精细驱动
+            if TAP_ACTIVE.load(Ordering::SeqCst) {
+                break;
+            }
+            // 20ms：没有事件钩子时只能轮询，间隔越短，鼠标压到卡片上后窗口
+            // 越快从穿透态切回可交互（点击/滚轮不再漏给下方窗口）
+            std::thread::sleep(std::time::Duration::from_millis(20));
+
+            // macOS 全局坐标原点在「主屏左下角、y 向上」，这里翻转为与窗口一致的
+            // 「左上角、y 向下」逻辑坐标（Core Graphics 点，已含 Retina 缩放）。
+            let (lx, ly) = mouse_pos_logical();
+            let lbutton = pressed_left_button();
+
+            let (in_win, top_zone, hover_zone, edge_zone) = {
+                let guard = REGIONS.lock().unwrap();
+                guard
+                    .as_ref()
+                    .map(|r| {
+                        // macOS 光标坐标已是逻辑点，无需除以 scale
+                        let in_win = ly >= 0.0 && ly <= r.panel_h && lx >= 0.0 && lx <= r.win_w;
+                        let top_zone = ly >= 0.0 && ly < 100.0 && lx >= 0.0 && lx <= r.win_w;
+                        let hover_zone = ly >= 0.0 && ly < 20.0 && lx >= 0.0 && lx <= r.win_w;
+                        let edge_zone = ly >= 0.0 && ly <= 2.0 && lx >= 0.0 && lx <= r.win_w;
+                        (in_win, top_zone, hover_zone, edge_zone)
+                    })
+                    .unwrap_or((false, false, false, false))
+            };
+
+            // 顶部拖拽状态机：贴到屏幕最顶端（≤2px）立即唤出，
+            // 其余顶部区域/条带内停留 150ms 才触发
+            if lbutton && edge_zone {
+                TOP_SINCE.store(now_ms(), Ordering::SeqCst);
+                TOP_ACTIVE.store(true, Ordering::SeqCst);
+                if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
+                    let _ = app.emit("show-rope", ());
+                }
+            } else if lbutton && (top_zone || in_win) {
+                if TOP_SINCE.load(Ordering::SeqCst) == 0 {
+                    TOP_SINCE.store(now_ms(), Ordering::SeqCst);
+                }
+                TOP_ACTIVE.store(true, Ordering::SeqCst);
+            } else {
+                TOP_ACTIVE.store(false, Ordering::SeqCst);
+                TOP_SINCE.store(0, Ordering::SeqCst);
+                TOP_SHOWN.store(false, Ordering::SeqCst);
+            }
+
+            // 顶部悬停状态机（无需按键）
+            if !lbutton && hover_zone {
+                if HOVER_SINCE.load(Ordering::SeqCst) == 0 {
+                    HOVER_SINCE.store(now_ms(), Ordering::SeqCst);
+                }
+                HOVER_ACTIVE.store(true, Ordering::SeqCst);
+            } else {
+                HOVER_ACTIVE.store(false, Ordering::SeqCst);
+                HOVER_SINCE.store(0, Ordering::SeqCst);
+                HOVER_SHOWN.store(false, Ordering::SeqCst);
+            }
+
+            if !TOP_SHOWN.load(Ordering::SeqCst) && TOP_ACTIVE.load(Ordering::SeqCst) {
+                let since = TOP_SINCE.load(Ordering::SeqCst);
+                if since > 0 && now_ms().saturating_sub(since) >= 150 {
+                    if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
+                        let _ = app.emit("show-rope", ());
+                    }
+                }
+            }
+            if !HOVER_SHOWN.load(Ordering::SeqCst) && HOVER_ACTIVE.load(Ordering::SeqCst) {
+                let since = HOVER_SINCE.load(Ordering::SeqCst);
+                if since > 0 && now_ms().saturating_sub(since) >= 500 {
+                    if !HOVER_SHOWN.swap(true, Ordering::SeqCst) {
+                        let _ = app.emit("show-rope", ());
+                    }
+                }
+            }
+
+            // 命中区判定：光标落在某个卡片矩形内 → 可交互（不穿透）
+            let over = OVERRIDE.load(Ordering::SeqCst);
+            let hit = {
+                let guard = REGIONS.lock().unwrap();
+                guard
+                    .as_ref()
+                    .map(|r| r.rects.iter().any(|rc| in_rect(lx, ly, rc)))
+                    .unwrap_or(false)
+            };
+            // 精细穿透（与 CGEventTap 分支对齐）：只拦截卡片命中区 / 覆盖层 / 面板内按住
+            // 左键拖拽，其余区域一律透传下方窗口。不再用「面板显示即整条不可穿透」，
+            // 否则绳子收起后（尤其 hover 触发把它重新唤出时）顶部整条会吞掉下方窗口的点击。
+            // 卡片命中区 REGIONS.rects 由前端实时上报，这里直接复用即可做到精细穿透。
+            let capture = over || hit || (lbutton && in_win);
+            if CAPTURING.load(Ordering::SeqCst) != capture {
+                CAPTURING.store(capture, Ordering::SeqCst);
+                if let Some(tx) = TX.get() {
+                    let _ = tx.send(Msg::Capture(capture));
+                }
+            }
+            if PANEL_HOVER.load(Ordering::SeqCst) != in_win {
+                PANEL_HOVER.store(in_win, Ordering::SeqCst);
+                if let Some(tx) = TX.get() {
+                    let _ = tx.send(Msg::Hover(in_win));
+                }
+            }
+
+            // Dock 放大联动：面板显示时光标在条带内 → 转发逻辑坐标；离开 → None
+            let mouse_pos = if REVEALED.load(Ordering::SeqCst) && in_win {
+                Some((lx, ly))
+            } else {
+                None
+            };
+            let mouse_changed = {
+                let mut last = LAST_MOUSE.lock().unwrap();
+                let changed = match (*last, mouse_pos) {
+                    (None, None) => false,
+                    (Some((x0, y0)), Some((x1, y1))) => {
+                        (x1 - x0).abs() >= 1.0 || (y1 - y0).abs() >= 1.0
+                    }
+                    _ => true,
+                };
+                if changed {
+                    *last = mouse_pos;
+                }
+                changed
+            };
+            if mouse_changed {
+                if let Some(tx) = TX.get() {
+                    let _ = tx.send(Msg::Mouse { pos: mouse_pos });
+                }
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct NSPoint {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct CGSize {
+    width: f64,
+    height: f64,
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct CGRect {
+    origin: NSPoint,
+    size: CGSize,
+}
+
+/// 当前鼠标在「主屏为基准、左上角原点、y 向下」的逻辑坐标（CG 点）。
+#[cfg(target_os = "macos")]
+unsafe fn mouse_pos_logical() -> (f64, f64) {
+    use objc::class;
+    use objc::msg_send;
+    use objc::sel;
+    use objc::sel_impl;
+    use objc::runtime::Object;
+
+    let point: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+    let screens: *mut Object = msg_send![class!(NSScreen), screens];
+    let n: usize = msg_send![screens, count];
+    let primary: *mut Object =
+        if n > 0 { msg_send![screens, objectAtIndex: 0usize] } else { std::ptr::null_mut() };
+    let h = if !primary.is_null() {
+        let frame: CGRect = msg_send![primary, frame];
+        frame.size.height
+    } else {
+        0.0
+    };
+    (point.x, h - point.y)
+}
+
+/// 当前是否按住鼠标左键（bit 0）。
+#[cfg(target_os = "macos")]
+unsafe fn pressed_left_button() -> bool {
+    use objc::class;
+    use objc::msg_send;
+    use objc::sel;
+    use objc::sel_impl;
+    let buttons: usize = msg_send![class!(NSEvent), pressedMouseButtons];
+    (buttons & 1) != 0
+}
+
+// ======================================================================
+// macOS 精细点击穿透：Core Graphics 事件钩子（等价 Windows 的 WH_MOUSE_LL）
+// 在事件分发前判断命中区：仅卡片 / 覆盖层 / 面板内拖拽截点击，其余透传下方窗口。
+// 需要「辅助功能 / 输入监控」授权；未授权时 start_macos 已回退到轮询粗粒度方案。
+// ======================================================================
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+#[link(name = "CoreFoundation", kind = "framework")]
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventGetLocation(event: *mut c_void) -> CGPoint;
+    fn CGEventGetIntegerValueField(event: *mut c_void, field: u32) -> i64;
+    fn CGEventTapCreate(
+        tapLocation: u32,
+        place: u32,
+        options: u32,
+        eventsOfInterest: u64,
+        callback: CGEventTapCallBack,
+        userInfo: *mut c_void,
+    ) -> *mut c_void;
+    fn CGEventTapEnable(tap: *mut c_void, enable: u8);
+    fn CGEventTapIsEnabled(tap: *mut c_void) -> u8;
+    fn CFMachPortCreateRunLoopSource(allocator: *mut c_void, port: *mut c_void, order: i32)
+        -> *mut c_void;
+    fn CFRunLoopGetCurrent() -> *mut c_void;
+    fn CFRunLoopAddSource(rl: *mut c_void, source: *mut c_void, mode: *mut c_void);
+    fn CFRunLoopRun();
+    fn AXIsProcessTrusted() -> u8;
+    fn AXIsProcessTrustedWithOptions(options: *mut c_void) -> u8;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    static kCFRunLoopCommonModes: *mut c_void;
+    static kCFAllocatorDefault: *mut c_void;
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+type CGEventTapCallBack = extern "C" fn(
+    proxy: *mut c_void,
+    event_type: u32,
+    event: *mut c_void,
+    user_info: *mut c_void,
+) -> *mut c_void;
+
+#[cfg(target_os = "macos")]
+mod cg_consts {
+    pub const LEFT_DOWN: u32 = 1;
+    pub const LEFT_UP: u32 = 2;
+    pub const RIGHT_DOWN: u32 = 3;
+    pub const RIGHT_UP: u32 = 4;
+    pub const MOUSE_MOVED: u32 = 5;
+    pub const SCROLL_WHEEL: u32 = 22;
+    pub const OTHER_DOWN: u32 = 25;
+    pub const OTHER_UP: u32 = 26;
+    pub const BUTTON_STATE: u32 = 11;
+    pub const WHEEL_AXIS1: u32 = 88;
+    pub const WHEEL_AXIS2: u32 = 89;
+    pub const SESSION_TAP: u32 = 1;
+    pub const HEAD_INSERT: u32 = 0;
+    pub const TAP_OPTION_DEFAULT: u32 = 0;
+}
+
+/// 事件钩子回调：在事件分发前判定命中区并切换穿透；返回原事件放行，
+/// 仅面板内滚轮（可滚动时）返回 NULL 吞掉，交前端处理。
+#[cfg(target_os = "macos")]
+extern "C" fn cg_tap_callback(
+    _proxy: *mut c_void,
+    event_type: u32,
+    event: *mut c_void,
+    _user_info: *mut c_void,
+) -> *mut c_void {
+    use cg_consts::*;
+    unsafe {
+    let pt = CGEventGetLocation(event);
+    let (lx, ly) = (pt.x, pt.y);
+    let lbutton = (CGEventGetIntegerValueField(event, BUTTON_STATE) & 1) != 0;
+
+    let (in_win, top_zone, hover_zone, edge_zone, hit, scrollable, revealed) = {
+        let guard = REGIONS.lock().unwrap();
+        match guard.as_ref() {
+            Some(r) => {
+                let in_win = ly >= 0.0 && ly <= r.panel_h && lx >= 0.0 && lx <= r.win_w;
+                let top_zone = ly >= 0.0 && ly < 100.0 && lx >= 0.0 && lx <= r.win_w;
+                let hover_zone = ly >= 0.0 && ly < 20.0 && lx >= 0.0 && lx <= r.win_w;
+                let edge_zone = ly >= 0.0 && ly <= 2.0 && lx >= 0.0 && lx <= r.win_w;
+                let hit = r.rects.iter().any(|rc| in_rect(lx, ly, rc));
+                (
+                    in_win,
+                    top_zone,
+                    hover_zone,
+                    edge_zone,
+                    hit,
+                    r.scrollable,
+                    REVEALED.load(Ordering::SeqCst),
+                )
+            }
+            None => (false, false, false, false, false, false, false),
+        }
+    };
+
+    // 顶部拖拽 / 悬停状态机（与轮询版一致，保证从屏幕顶部唤出绳子）
+    if lbutton && edge_zone {
+        TOP_SINCE.store(now_ms(), Ordering::SeqCst);
+        TOP_ACTIVE.store(true, Ordering::SeqCst);
+        if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
+            if let Some(app) = APP.get() {
+                let _ = app.emit("show-rope", ());
+            }
+        }
+    } else if lbutton && (top_zone || in_win) {
+        if TOP_SINCE.load(Ordering::SeqCst) == 0 {
+            TOP_SINCE.store(now_ms(), Ordering::SeqCst);
+        }
+        TOP_ACTIVE.store(true, Ordering::SeqCst);
+    } else {
+        TOP_ACTIVE.store(false, Ordering::SeqCst);
+        TOP_SINCE.store(0, Ordering::SeqCst);
+        TOP_SHOWN.store(false, Ordering::SeqCst);
+    }
+    if !lbutton && hover_zone {
+        if HOVER_SINCE.load(Ordering::SeqCst) == 0 {
+            HOVER_SINCE.store(now_ms(), Ordering::SeqCst);
+        }
+        HOVER_ACTIVE.store(true, Ordering::SeqCst);
+    } else {
+        HOVER_ACTIVE.store(false, Ordering::SeqCst);
+        HOVER_SINCE.store(0, Ordering::SeqCst);
+        HOVER_SHOWN.store(false, Ordering::SeqCst);
+    }
+    if !TOP_SHOWN.load(Ordering::SeqCst) && TOP_ACTIVE.load(Ordering::SeqCst) {
+        let since = TOP_SINCE.load(Ordering::SeqCst);
+        if since > 0 && now_ms().saturating_sub(since) >= 150 {
+            if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
+                if let Some(app) = APP.get() {
+                    let _ = app.emit("show-rope", ());
+                }
+            }
+        }
+    }
+    if !HOVER_SHOWN.load(Ordering::SeqCst) && HOVER_ACTIVE.load(Ordering::SeqCst) {
+        let since = HOVER_SINCE.load(Ordering::SeqCst);
+        if since > 0 && now_ms().saturating_sub(since) >= 500 {
+            if !HOVER_SHOWN.swap(true, Ordering::SeqCst) {
+                if let Some(app) = APP.get() {
+                    let _ = app.emit("show-rope", ());
+                }
+            }
+        }
+    }
+
+    // 精细穿透：仅卡片命中区 / 覆盖层 / 面板内按住左键拖拽时截点击，其余透传下方窗口
+    let over = OVERRIDE.load(Ordering::SeqCst);
+    let capture = over || hit || (lbutton && in_win);
+    if CAPTURING.load(Ordering::SeqCst) != capture {
+        CAPTURING.store(capture, Ordering::SeqCst);
+        tx_send(Msg::Capture(capture));
+    }
+    if PANEL_HOVER.load(Ordering::SeqCst) != in_win {
+        PANEL_HOVER.store(in_win, Ordering::SeqCst);
+        tx_send(Msg::Hover(in_win));
+    }
+
+    // Dock 放大联动
+    let mouse_pos = if revealed && in_win {
+        Some((lx, ly))
+    } else {
+        None
+    };
+    let mouse_changed = {
+        let mut last = LAST_MOUSE.lock().unwrap();
+        let changed = match (*last, mouse_pos) {
+            (None, None) => false,
+            (Some((x0, y0)), Some((x1, y1))) => {
+                (x1 - x0).abs() >= 1.0 || (y1 - y0).abs() >= 1.0
+            }
+            _ => true,
+        };
+        if changed {
+            *last = mouse_pos;
+        }
+        changed
+    };
+    if mouse_changed {
+        tx_send(Msg::Mouse { pos: mouse_pos });
+    }
+
+    // 滚轮：面板内可滚动，或光标正压在卡片上时由本应用消费并转发前端，
+    // 避免下方窗口同时滚动（卡片接管全部事件，不再穿透）
+    if event_type == SCROLL_WHEEL && revealed && in_win && (scrollable || hit) {
+        let dy = CGEventGetIntegerValueField(event, WHEEL_AXIS1);
+        let dx = CGEventGetIntegerValueField(event, WHEEL_AXIS2);
+        tx_send(Msg::Wheel {
+            dx: dx as i32,
+            dy: -dy as i32,
+        });
+        return std::ptr::null_mut();
+    }
+
+    event
+    }
+}
+
+/// 创建并启动 CGEventTap（精细穿透）。已生效或成功则返回 true。
+#[cfg(target_os = "macos")]
+fn ensure_tap(app: &AppHandle) -> bool {
+    if TAP_ACTIVE.load(Ordering::SeqCst) {
+        return true;
+    }
+    // 未授权则无法创建有效事件 tap（CGEventTapIsEnabled 会为 false）
+    if unsafe { AXIsProcessTrusted() } == 0 {
+        return false;
+    }
+    let events: u64 = (1u64 << cg_consts::LEFT_DOWN)
+        | (1u64 << cg_consts::LEFT_UP)
+        | (1u64 << cg_consts::RIGHT_DOWN)
+        | (1u64 << cg_consts::RIGHT_UP)
+        | (1u64 << cg_consts::MOUSE_MOVED)
+        | (1u64 << cg_consts::SCROLL_WHEEL)
+        | (1u64 << cg_consts::OTHER_DOWN)
+        | (1u64 << cg_consts::OTHER_UP);
+    let tap = unsafe {
+        CGEventTapCreate(
+            cg_consts::SESSION_TAP,
+            cg_consts::HEAD_INSERT,
+            cg_consts::TAP_OPTION_DEFAULT,
+            events,
+            cg_tap_callback,
+            std::ptr::null_mut(),
+        )
+    };
+    if tap.is_null() {
+        return false;
+    }
+    unsafe { CGEventTapEnable(tap, 1) };
+    if unsafe { CGEventTapIsEnabled(tap) } == 0 {
+        return false;
+    }
+    // 裸指针非 Send，先转 usize 再跨线程，避免 move 捕获指针
+    let tap_addr = tap as usize;
+    std::thread::spawn(move || unsafe {
+        let tap = tap_addr as *mut c_void;
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0);
+        if !source.is_null() {
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
+        }
+        CFRunLoopRun();
+    });
+    TAP_ACTIVE.store(true, Ordering::SeqCst);
+    let _ = app;
+    true
+}
+
+/// 弹出系统授权框请求「辅助功能 / 输入监控」权限；授权成功后即时启用精细穿透。
+#[cfg(target_os = "macos")]
+pub fn mac_request_permission(app: &AppHandle) -> bool {
+    unsafe {
+        let _ = prompt_trust();
+    }
+    let trusted = unsafe { AXIsProcessTrusted() } != 0;
+    if trusted && !TAP_ACTIVE.load(Ordering::SeqCst) {
+        ensure_tap(app);
+    }
+    trusted
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn mac_request_permission(_app: &AppHandle) -> bool {
+    true
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn prompt_trust() -> bool {
+    use objc::class;
+    use objc::msg_send;
+    use objc::runtime::Object;
+    use objc::sel;
+    use objc::sel_impl;
+    let key: *mut Object = msg_send![class!(NSString), stringWithUTF8String: b"AXTrustedCheckOptionPrompt\0".as_ptr() as *const i8];
+    let val: *mut Object = msg_send![class!(NSNumber), numberWithBool: 1i8];
+    let dict_class = class!(NSDictionary);
+    let dict: *mut Object =
+        msg_send![dict_class, dictionaryWithObject: val forKey: key];
+    AXIsProcessTrustedWithOptions(dict as *mut c_void) != 0
 }

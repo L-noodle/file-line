@@ -10,6 +10,15 @@
     0 6px 14px rgba(0, 0, 0, 0.2), 0 16px 36px rgba(0, 0, 0, 0.16);
 }
 
+/* 明暗主题由 JS（系统原生主题 + prefers-color-scheme）写入 <html data-theme>，
+   样式一律按该属性分支，避免各平台媒体查询与系统设置不同步 */
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -88,13 +97,11 @@ body,
   outline: 1px solid var(--stroke-outer);
   box-shadow: var(--shadow-card);
 }
-@media (prefers-color-scheme: dark) {
-  .glass,
-  .glass-strong {
-    background: var(--glass-dark);
-    border-color: rgba(255, 255, 255, 0.13);
-    outline-color: rgba(0, 0, 0, 0.35);
-  }
+html[data-theme="dark"] .glass,
+html[data-theme="dark"] .glass-strong {
+  background: var(--glass-dark);
+  border-color: rgba(255, 255, 255, 0.13);
+  outline-color: rgba(0, 0, 0, 0.35);
 }
 
 /* ---------- 挂点（卡片 + 衣夹） ---------- */
@@ -231,18 +238,16 @@ body,
   background: rgba(0, 0, 0, 0.28);
   box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.18);
 }
-@media (prefers-color-scheme: dark) {
-  .clothespin {
-    background: linear-gradient(
-      100deg,
-      rgba(255, 255, 255, 0.18) 0%,
-      rgba(255, 255, 255, 0.4) 16%,
-      rgba(255, 255, 255, 0.14) 40%,
-      rgba(255, 255, 255, 0.32) 64%,
-      rgba(255, 255, 255, 0.12) 100%
-    );
-    border-color: rgba(255, 255, 255, 0.3);
-  }
+html[data-theme="dark"] .clothespin {
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.18) 0%,
+    rgba(255, 255, 255, 0.4) 16%,
+    rgba(255, 255, 255, 0.14) 40%,
+    rgba(255, 255, 255, 0.32) 64%,
+    rgba(255, 255, 255, 0.12) 100%
+  );
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
 /* 玻璃卡 */
@@ -263,17 +268,15 @@ body,
   position: relative;
 }
 
-@media (prefers-color-scheme: dark) {
-  .card {
-    background: rgba(38, 38, 42, 0.8);
-  }
-  .card::after {
-    background: linear-gradient(
-      145deg,
-      rgba(255, 255, 255, 0.3),
-      rgba(255, 255, 255, 0.05)
-    );
-  }
+html[data-theme="dark"] .card {
+  background: rgba(38, 38, 42, 0.8);
+}
+html[data-theme="dark"] .card::after {
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.3),
+    rgba(255, 255, 255, 0.05)
+  );
 }
 .card:hover {
   /* Dock 放大已承担放大职责，hover 仅保留轻微上浮，避免两级 scale 叠加 */
@@ -357,10 +360,8 @@ body,
   white-space: nowrap;
   text-align: center;
 }
-@media (prefers-color-scheme: dark) {
-  .card-name {
-    color: #ddd;
-  }
+html[data-theme="dark"] .card-name {
+  color: #ddd;
 }
 
 /* 卡片右上角删除按钮 */
@@ -453,12 +454,17 @@ body,
     transform 0.25s cubic-bezier(0.34, 1.4, 0.5, 1),
     box-shadow 0.2s;
 }
-@media (prefers-color-scheme: dark) {
-  .fan-card {
-    background: rgba(38, 38, 42, 0.8);
-  }
+/* 堆叠卡不走 .glass（叠放时不用 backdrop-filter），暗色需与 .card 的暗色分支对齐 */
+html[data-theme="dark"] .fan-card {
+  background: rgba(38, 38, 42, 0.72);
+  border-color: rgba(255, 255, 255, 0.13);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 .fan-zone:hover .fan-card {
+  box-shadow: var(--shadow-card-hover);
+}
+/* 暗色分支特异性更高，需单独保留 hover 阴影 */
+html[data-theme="dark"] .fan-zone:hover .fan-card {
   box-shadow: var(--shadow-card-hover);
 }
 .fan-badge {
@@ -504,10 +510,8 @@ body,
   border-left: 1px solid var(--stroke-light);
   border-top: 1px solid var(--stroke-light);
 }
-@media (prefers-color-scheme: dark) {
-  .fan-tooltip .fan-arrow {
-    border-color: rgba(255, 255, 255, 0.13);
-  }
+html[data-theme="dark"] .fan-tooltip .fan-arrow {
+  border-color: rgba(255, 255, 255, 0.13);
 }
 @keyframes fanOpen {
   from {
@@ -567,10 +571,11 @@ body,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-@media (prefers-color-scheme: dark) {
-  .fan-row-name {
-    color: #e6e6e6;
-  }
+html[data-theme="dark"] .fan-row-name {
+  color: #e6e6e6;
+}
+html[data-theme="dark"] .fan-title {
+  color: #9a9aa2;
 }
 
 /* ---------- 右键菜单（Win11 风格） ---------- */
@@ -584,10 +589,12 @@ body,
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
   background: rgba(252, 252, 253, 0.95);
 }
-@media (prefers-color-scheme: dark) {
-  .ctx-menu {
-    background: rgba(38, 38, 42, 0.95);
-  }
+/* 暗色：Win11 / macOS 深色菜单（Mica / 深色材质观感） */
+html[data-theme="dark"] .ctx-menu {
+  background: rgba(38, 38, 42, 0.95);
+  border-color: rgba(255, 255, 255, 0.13);
+  outline-color: rgba(0, 0, 0, 0.35);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 @keyframes ctxIn {
   from {
@@ -634,6 +641,27 @@ body,
   margin: 5px 8px;
   background: rgba(127, 127, 127, 0.25);
 }
+/* 暗色下的菜单文字 / 禁用 / 危险项 / 分割线 */
+html[data-theme="dark"] .ctx-item {
+  color: #f3f3f5;
+}
+html[data-theme="dark"] .ctx-item:hover:not(:disabled) {
+  background: #3b82f7;
+  color: #ffffff;
+}
+html[data-theme="dark"] .ctx-item:disabled {
+  color: rgba(243, 243, 245, 0.4);
+}
+html[data-theme="dark"] .ctx-item.danger {
+  color: #ff7b6b;
+}
+html[data-theme="dark"] .ctx-item.danger:hover:not(:disabled) {
+  background: #c42b1c;
+  color: #fff;
+}
+html[data-theme="dark"] .ctx-sep {
+  background: rgba(255, 255, 255, 0.14);
+}
 
 /* ---------- Toast ---------- */
 .toast {
@@ -658,10 +686,53 @@ body,
     transform: translate(-50%, 8px);
   }
 }
-@media (prefers-color-scheme: dark) {
-  .toast {
-    color: #eee;
-  }
+html[data-theme="dark"] .toast {
+  color: #eee;
+}
+
+/* ---------- macOS 授权提示横幅 ---------- */
+.perm-notice {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  color: #333;
+  max-width: 92%;
+  z-index: 950;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  animation: toastIn 0.25s cubic-bezier(0.2, 1.2, 0.4, 1) both;
+}
+.perm-text {
+  flex: 1;
+  line-height: 1.4;
+}
+.perm-btn {
+  flex: none;
+  border: none;
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+  background: #ffb300;
+  color: #3a2c00;
+  font-weight: 600;
+}
+.perm-btn.ghost {
+  background: rgba(127, 127, 127, 0.2);
+  color: #555;
+  font-weight: 500;
+}
+html[data-theme="dark"] .perm-notice {
+  color: #eee;
+}
+html[data-theme="dark"] .perm-btn.ghost {
+  color: #ccc;
 }
 
 /* ---------- 使用说明弹窗（卡片同款视觉） ---------- */
@@ -762,26 +833,24 @@ body,
   line-height: 1.4;
   margin-top: 1px;
 }
-@media (prefers-color-scheme: dark) {
-  .help-inner {
-    background: linear-gradient(165deg, #2b2b30 55%, #232327 100%);
-  }
-  .help-title {
-    color: #f0f0f0;
-  }
-  .help-sub {
-    color: #9a9aa2;
-  }
-  .help-col + .help-col {
-    border-left-color: rgba(127, 127, 127, 0.3);
-  }
-  .help-row:nth-child(even) {
-    background: rgba(127, 127, 127, 0.12);
-  }
-  .help-k {
-    color: #e2e2e6;
-  }
-  .help-v {
-    color: #a6a6ae;
-  }
+html[data-theme="dark"] .help-inner {
+  background: linear-gradient(165deg, #2b2b30 55%, #232327 100%);
+}
+html[data-theme="dark"] .help-title {
+  color: #f0f0f0;
+}
+html[data-theme="dark"] .help-sub {
+  color: #9a9aa2;
+}
+html[data-theme="dark"] .help-col + .help-col {
+  border-left-color: rgba(127, 127, 127, 0.3);
+}
+html[data-theme="dark"] .help-row:nth-child(even) {
+  background: rgba(127, 127, 127, 0.12);
+}
+html[data-theme="dark"] .help-k {
+  color: #e2e2e6;
+}
+html[data-theme="dark"] .help-v {
+  color: #a6a6ae;
 }

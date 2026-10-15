@@ -151,12 +151,17 @@ fn open_path(path: String) -> Result<(), String> {
     open_with_shell(&path)
 }
 
-/// 在资源管理器中定位文件。文件夹则直接打开。
+/// 在文件管理器中定位文件。文件夹则直接打开。
 #[tauri::command]
 fn show_in_folder(path: String) -> Result<(), String> {
-    let p = PathBuf::from(&path);
+    show_in_folder_impl(&path)
+}
+
+#[cfg(windows)]
+fn show_in_folder_impl(path: &str) -> Result<(), String> {
+    let p = PathBuf::from(path);
     if p.is_dir() {
-        return open_with_shell(&path);
+        return open_with_shell(path);
     }
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::ShellExecuteW;
@@ -178,6 +183,16 @@ fn show_in_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn show_in_folder_impl(path: &str) -> Result<(), String> {
+    std::process::Command::new("open")
+        .args(["-R", path])
+        .status()
+        .map(|_| ())
+        .map_err(|e| format!("无法定位 {}: {}", path, e))
+}
+
+#[cfg(windows)]
 fn open_with_shell(path: &str) -> Result<(), String> {
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::ShellExecuteW;
@@ -192,6 +207,15 @@ fn open_with_shell(path: &str) -> Result<(), String> {
     } else {
         Err(format!("无法打开 {}", path))
     }
+}
+
+#[cfg(target_os = "macos")]
+fn open_with_shell(path: &str) -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg(path)
+        .status()
+        .map(|_| ())
+        .map_err(|e| format!("无法打开 {}: {}", path, e))
 }
 
 /// 全部另存为：在用户选择的文件夹内新建「晾衣绳 + 年月日时分秒」子文件夹，
@@ -336,6 +360,50 @@ fn window_resized(app: AppHandle) {
     place_window(&app);
 }
 
+/// 把应用激活到前台。
+/// macOS：crabnebula 的 start_drag 在应用未激活时拉不起原生拖拽会话
+/// （首拖/切到别的 App 再拖会失败），这里在拖拽手势开始时主动激活；
+/// Windows 用 SetForegroundWindow 置前，其余平台空实现。
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn activate_app(_app: AppHandle) {
+    use objc::class;
+    use objc::msg_send;
+    use objc::runtime::Object;
+    use objc::sel;
+    use objc::sel_impl;
+    unsafe {
+        let app_inst: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![app_inst, activateIgnoringOtherApps: objc::runtime::YES];
+    }
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn activate_app(app: AppHandle) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+    if let Some(win) = app.get_webview_window("main") {
+        if let Ok(h) = win.hwnd() {
+            let hwnd = HWND(h.0 as *mut _);
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                let _ = SetForegroundWindow(hwnd);
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+#[tauri::command]
+fn activate_app(_app: AppHandle) {}
+
+/// 请求 macOS「辅助功能 / 输入监控」授权以启用精细点击穿透（未授权时自动回退粗粒度方案）。
+#[tauri::command]
+fn request_mac_permission(app: AppHandle) -> bool {
+    mousehook::mac_request_permission(&app)
+}
+
 // ---------- 运行 ----------
 
 pub fn run() {
@@ -361,7 +429,9 @@ pub fn run() {
             make_thumb,
             window_resized,
             show_rope,
-            hide_rope
+            hide_rope,
+            activate_app,
+            request_mac_permission
         ])
         .setup(|app| {
             // 恢复卡片大小
@@ -378,6 +448,7 @@ pub fn run() {
                 // 1.5s 后隐藏；期间若已唤出（REVEALED）则不隐藏。
                 // drop target 无需此刻安装：hide 时子窗口销毁注册随之作废，
                 // 唤出时 show_rope 会延迟重装（幂等 + 存活性验证）
+                #[cfg(windows)]
                 if let Ok(h) = win.hwnd() {
                     use windows::Win32::Foundation::HWND;
                     use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
