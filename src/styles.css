@@ -4,19 +4,27 @@
   --glass-light: rgba(252, 252, 253, 0.55);
   --glass-dark: rgba(38, 38, 42, 0.52);
   --stroke-light: rgba(255, 255, 255, 0.55);
-  --stroke-outer: rgba(0, 0, 0, 0.10);
-  --shadow-card: 0 3px 10px rgba(0, 0, 0, 0.14), 0 10px 28px rgba(0, 0, 0, 0.10);
-  --shadow-card-hover: 0 6px 14px rgba(0, 0, 0, 0.20), 0 16px 36px rgba(0, 0, 0, 0.16);
+  --stroke-outer: rgba(0, 0, 0, 0.1);
+  --shadow-card: 0 3px 10px rgba(0, 0, 0, 0.14), 0 10px 28px rgba(0, 0, 0, 0.1);
+  --shadow-card-hover:
+    0 6px 14px rgba(0, 0, 0, 0.2), 0 16px 36px rgba(0, 0, 0, 0.16);
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
-html, body, #root {
+html,
+body,
+#root {
   width: 100%;
   height: 100vh;
   overflow: hidden;
   background: transparent;
-  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-family:
+    "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
   -webkit-user-select: none;
   user-select: none;
   cursor: default;
@@ -31,6 +39,8 @@ html, body, #root {
 .panel.hidden {
   transform: translateY(-105%);
   pointer-events: none;
+  /* 滑出单独放慢（+1s）；transition 取自变化后的状态，滑入仍是上面的 0.28s */
+  transition: transform 1.28s cubic-bezier(0.32, 0.72, 0.16, 1);
 }
 
 .rope {
@@ -38,6 +48,16 @@ html, body, #root {
   top: 0;
   left: -20px;
   pointer-events: none;
+}
+
+/* 拖拽悬停在可放置区：彩色流动层渐显（"可以松手了"反馈） */
+.rope-flow {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  filter: drop-shadow(0 0 5px rgba(129, 140, 248, 0.6));
+}
+.rope.drag-hover .rope-flow {
+  opacity: 1;
 }
 
 /* 空绳装饰：中间小夹子挂着的小图 */
@@ -52,23 +72,25 @@ html, body, #root {
   animation: dropIn 0.5s cubic-bezier(0.3, 1.25, 0.45, 1) both;
 }
 .empty-dog {
-  margin-top: -2px;
+  margin-top: -5px;
   object-fit: contain;
   border-radius: 5px;
   filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.2));
 }
 
 /* ---------- 毛玻璃 ---------- */
-.glass, .glass-strong {
+.glass,
+.glass-strong {
   background: var(--glass-light);
-  backdrop-filter: blur(22px) saturate(1.7);
-  -webkit-backdrop-filter: blur(22px) saturate(1.7);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
   border: 1px solid var(--stroke-light);
   outline: 1px solid var(--stroke-outer);
   box-shadow: var(--shadow-card);
 }
 @media (prefers-color-scheme: dark) {
-  .glass, .glass-strong {
+  .glass,
+  .glass-strong {
     background: var(--glass-dark);
     border-color: rgba(255, 255, 255, 0.13);
     outline-color: rgba(0, 0, 0, 0.35);
@@ -80,13 +102,21 @@ html, body, #root {
   position: absolute;
   width: var(--card-w);
   animation: dropIn 0.5s cubic-bezier(0.3, 1.25, 0.45, 1) both;
-  transition: left 0.45s cubic-bezier(0.32, 0.72, 0.16, 1);
+  transition: left 0.3s cubic-bezier(0.32, 0.72, 0.16, 1);
 }
 @keyframes dropIn {
-  from { transform: translateY(-48px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(-48px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
-.pegged-slot.dragging { opacity: 0.4; }
+.pegged-slot.dragging {
+  opacity: 0.4;
+}
 
 /* 取下卡片：重力加速坠落 + 旋转渐隐，坠出绳区 */
 .pegged-slot.falling {
@@ -94,8 +124,14 @@ html, body, #root {
   pointer-events: none;
 }
 @keyframes cardFall {
-  from { transform: translateY(0) rotate(0deg); opacity: 1; }
-  to { transform: translateY(320px) rotate(24deg); opacity: 0; }
+  from {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(320px) rotate(24deg);
+    opacity: 0;
+  }
 }
 
 .pegged-rot {
@@ -107,20 +143,48 @@ html, body, #root {
 }
 
 /* 衣夹：9×26 金属渐变 + 顶部插槽（对齐参考项目） */
+/* 玻璃衣夹：半透明玻璃体 + 背景折射 + 边缘内高光 */
 .clothespin {
   position: relative;
   width: 9px;
   height: 26px;
   border-radius: 3.5px;
   background: linear-gradient(
-    90deg,
-    rgba(179, 179, 179, 0.70) 0%,
-    rgba(237, 237, 237, 0.93) 30%,
-    rgba(209, 209, 209, 0.82) 65%,
-    rgba(158, 158, 158, 0.62) 100%
+    100deg,
+    rgba(255, 255, 255, 0.4) 0%,
+    rgba(255, 255, 255, 0.72) 16%,
+    rgba(255, 255, 255, 0.3) 40%,
+    rgba(255, 255, 255, 0.6) 64%,
+    rgba(255, 255, 255, 0.26) 100%
   );
-  box-shadow: 0 1.5px 2.5px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(5px) saturate(1.5);
+  -webkit-backdrop-filter: blur(5px) saturate(1.5);
+  border: 0.5px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    inset 0 0.5px 0.5px rgba(255, 255, 255, 0.85),
+    inset 0.5px 0 1px rgba(255, 255, 255, 0.3),
+    inset -0.5px 0 1px rgba(255, 255, 255, 0.16),
+    inset 0 -1px 1.5px rgba(255, 255, 255, 0.12),
+    0 1.5px 3px rgba(0, 0, 0, 0.2),
+    0 3px 8px rgba(0, 0, 0, 0.1);
   z-index: 2;
+}
+/* 玻璃上的斜向镜面高光条 */
+.clothespin::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 1.6px;
+  width: 1.5px;
+  border-radius: 1px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.95),
+    rgba(255, 255, 255, 0.35) 55%,
+    rgba(255, 255, 255, 0.05)
+  );
+  pointer-events: none;
 }
 .clothespin-slot {
   position: absolute;
@@ -130,28 +194,52 @@ html, body, #root {
   width: 5px;
   height: 1.4px;
   border-radius: 1px;
-  background: rgba(0, 0, 0, 0.32);
+  background: rgba(0, 0, 0, 0.28);
+  box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.18);
+}
+@media (prefers-color-scheme: dark) {
+  .clothespin {
+    background: linear-gradient(
+      100deg,
+      rgba(255, 255, 255, 0.18) 0%,
+      rgba(255, 255, 255, 0.4) 16%,
+      rgba(255, 255, 255, 0.14) 40%,
+      rgba(255, 255, 255, 0.32) 64%,
+      rgba(255, 255, 255, 0.12) 100%
+    );
+    border-color: rgba(255, 255, 255, 0.3);
+  }
 }
 
 /* 玻璃卡 */
 .card {
   width: var(--card-w);
-  margin-top: -2px;
-  border-radius: 16px;
-  padding: 4px;
-  border: 3px solid #F7F6FB;
-  background: #E6E6EE;
-  backdrop-filter: blur(12px) saturate(180%);
-  -webkit-backdrop-filter: blur(12px) saturate(180%); /* Safari 兼容 */
+  margin-top: -8px;
+  border-radius: 14px;
+  padding: 6px;
+  border: 5px solid #ffffff;
+  background: linear-gradient(145deg, #fafafa 60%, rgb(225, 228, 241) 100%);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
   position: relative;
 }
+
 @media (prefers-color-scheme: dark) {
-  .card { background: rgba(38, 38, 42, 0.5); }
+  .card {
+    background: rgba(38, 38, 42, 0.8);
+  }
+  .card::after {
+    background: linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.3),
+      rgba(255, 255, 255, 0.05)
+    );
+  }
 }
 .card:hover {
   transform: translateY(-2px) scale(1.045);
@@ -164,17 +252,17 @@ html, body, #root {
 .card-img {
   max-width: calc(var(--card-w) - 14px);
   max-height: var(--photo-h);
-  border-radius: 12px;
+  border-radius: 10px;
   object-fit: contain;
   border: 0.5px solid rgba(255, 255, 255, 0.18);
   outline: 0.5px solid rgba(0, 0, 0, 0.06);
   display: block;
 }
 
-/* 文件夹 / 文件卡片 */
+/* 文件夹 / 文件卡片：高度随 photo-h 缩放（+26 容纳固定像素的文字区） */
 .card-tile {
   width: calc(var(--card-w) - 14px);
-  max-height: var(--photo-h);
+  max-height: calc(var(--photo-h) + 26px);
   border-radius: 12px;
   display: flex;
   flex-direction: column;
@@ -185,7 +273,8 @@ html, body, #root {
   overflow: hidden;
 }
 .folder-icon {
-  width: 46%;
+  height: calc(var(--photo-h) * 0.48);
+  width: auto;
   max-width: 58px;
   max-height: 46px;
   fill: #ffc53d;
@@ -195,12 +284,13 @@ html, body, #root {
 .folder-img {
   width: 64%;
   max-width: 84px;
-  max-height: 64px;
+  max-height: calc(var(--photo-h) * 0.62);
   object-fit: contain;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.18));
 }
 .file-icon {
-  width: 34%;
+  height: calc(var(--photo-h) * 0.38);
+  width: auto;
   max-width: 44px;
   max-height: 44px;
   fill: #5682f5;
@@ -209,7 +299,7 @@ html, body, #root {
 .file-img {
   width: 52%;
   max-width: 64px;
-  max-height: 56px;
+  max-height: calc(var(--photo-h) * 0.55);
   object-fit: contain;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.15));
 }
@@ -232,7 +322,11 @@ html, body, #root {
   white-space: nowrap;
   text-align: center;
 }
-@media (prefers-color-scheme: dark) { .card-name { color: #ddd; } }
+@media (prefers-color-scheme: dark) {
+  .card-name {
+    color: #ddd;
+  }
+}
 
 /* 卡片右上角删除按钮 */
 .card {
@@ -242,16 +336,16 @@ html, body, #root {
   position: absolute;
   top: 3px;
   right: 3px;
-  width: 18px;
-  height: 18px;
-  padding: 2px;
+  width: 22px;
+  height: 22px;
+  padding: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.72);
-  border: 1px solid rgba(0, 0, 0, 0.38);
-  color: rgba(255, 255, 255, 0.92);
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  color: #000;
   cursor: pointer;
   transform: scale(0);
   transition: transform 0.2s ease;
@@ -262,7 +356,10 @@ html, body, #root {
   transform: scale(1);
 }
 .card-x:hover {
-  background: rgba(0, 0, 0, 0.88);
+  background: #f0f0f0;
+}
+.card-x svg {
+  stroke-width: 3;
 }
 
 /* 复制提示 */
@@ -280,62 +377,72 @@ html, body, #root {
   white-space: nowrap;
   z-index: 5;
 }
-@keyframes tipIn { from { opacity: 0; transform: translate(-50%, 4px); } }
+@keyframes tipIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
+}
 
 /* ---------- 折叠扇（溢出） ---------- */
 .fan-zone {
   position: absolute;
-  top: 26px;
+  top: 18px; /* 与普通卡片顶部对齐（绳位 - PIN_ABOVE + 衣夹 26 - 重叠 8） */
   width: 0;
   z-index: 30;
 }
 .fan-stack {
   position: relative;
-  width: 92px;
-  height: 100px;
+  width: var(--card-w);
+  height: calc(var(--photo-h) + 72px);
   transform: translateX(-50%);
   cursor: pointer;
 }
+/* 与 .card 同款视觉（白边玻璃相片），尺寸跟随卡片档位缩放 */
 .fan-card {
   position: absolute;
   left: 50%;
   top: 0;
-  width: 62px;
-  height: 78px;
-  margin-left: -31px;
-  border-radius: 10px;
-  overflow: hidden;
+  width: var(--card-w);
+  margin-left: calc(var(--card-w) / -2);
+  border-radius: 14px;
+  padding: 6px;
+  border: 5px solid #ffffff;
+  background: linear-gradient(145deg, #fafafa 60%, rgb(225, 228, 241) 100%);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.6);
-  transition: transform 0.25s cubic-bezier(0.34, 1.4, 0.5, 1), box-shadow 0.2s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  transition:
+    transform 0.25s cubic-bezier(0.34, 1.4, 0.5, 1),
+    box-shadow 0.2s;
 }
-@media (prefers-color-scheme: dark) { .fan-card { background: rgba(44, 44, 48, 0.6); } }
-.fan-card img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+@media (prefers-color-scheme: dark) {
+  .fan-card {
+    background: rgba(38, 38, 42, 0.8);
+  }
 }
-.fan-glyph { font-size: 26px; }
-.fan-zone:hover .fan-card { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22); }
+.fan-zone:hover .fan-card {
+  box-shadow: var(--shadow-card-hover);
+}
 .fan-badge {
   position: absolute;
   right: -4px;
-  bottom: 2px;
+  top: 2px;
   min-width: 22px;
   height: 18px;
-  padding: 0 5px;
+  padding: 0 7px;
   border-radius: 999px;
   background: #5682f5;
   color: #fff;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
-  z-index: 3;
+  z-index: 10;
 }
 
 /* 展开的 tooltip（顶部小箭头） */
@@ -363,11 +470,19 @@ html, body, #root {
   border-top: 1px solid var(--stroke-light);
 }
 @media (prefers-color-scheme: dark) {
-  .fan-tooltip .fan-arrow { border-color: rgba(255, 255, 255, 0.13); }
+  .fan-tooltip .fan-arrow {
+    border-color: rgba(255, 255, 255, 0.13);
+  }
 }
 @keyframes fanOpen {
-  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 .fan-title {
   font-size: 11px;
@@ -391,7 +506,9 @@ html, body, #root {
   text-align: left;
   transition: background 0.12s;
 }
-.fan-row:hover { background: rgba(86, 130, 245, 0.14); }
+.fan-row:hover {
+  background: rgba(86, 130, 245, 0.14);
+}
 .fan-row-thumb {
   width: 34px;
   height: 34px;
@@ -403,7 +520,11 @@ html, body, #root {
   overflow: hidden;
   flex: none;
 }
-.fan-row-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.fan-row-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .fan-row-name {
   font-size: 12px;
   color: #333;
@@ -411,7 +532,11 @@ html, body, #root {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-@media (prefers-color-scheme: dark) { .fan-row-name { color: #e6e6e6; } }
+@media (prefers-color-scheme: dark) {
+  .fan-row-name {
+    color: #e6e6e6;
+  }
+}
 
 /* ---------- 右键菜单（Win11 风格） ---------- */
 .ctx-menu {
@@ -425,11 +550,19 @@ html, body, #root {
   background: rgba(252, 252, 253, 0.95);
 }
 @media (prefers-color-scheme: dark) {
-  .ctx-menu { background: rgba(38, 38, 42, 0.95); }
+  .ctx-menu {
+    background: rgba(38, 38, 42, 0.95);
+  }
 }
 @keyframes ctxIn {
-  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 .ctx-item {
   display: flex;
@@ -447,11 +580,25 @@ html, body, #root {
   text-align: left;
   transition: background 0.1s;
 }
-.ctx-item:hover:not(:disabled) { background: #3B82F7; color: #ffffff; }
-.ctx-item:disabled { color: #999; cursor: default; }
-.ctx-item.danger { color: #c42b1c; }
-.ctx-item.bold { font-weight: 600; }
-.ctx-sep { height: 1px; margin: 5px 8px; background: rgba(127, 127, 127, 0.25); }
+.ctx-item:hover:not(:disabled) {
+  background: #3b82f7;
+  color: #ffffff;
+}
+.ctx-item:disabled {
+  color: #999;
+  cursor: default;
+}
+.ctx-item.danger {
+  color: #c42b1c;
+}
+.ctx-item.bold {
+  font-weight: 600;
+}
+.ctx-sep {
+  height: 1px;
+  margin: 5px 8px;
+  background: rgba(127, 127, 127, 0.25);
+}
 
 /* ---------- Toast ---------- */
 .toast {
@@ -471,6 +618,13 @@ html, body, #root {
   z-index: 900;
 }
 @keyframes toastIn {
-  from { opacity: 0; transform: translate(-50%, 8px); }
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
 }
-@media (prefers-color-scheme: dark) { .toast { color: #eee; } }
+@media (prefers-color-scheme: dark) {
+  .toast {
+    color: #eee;
+  }
+}

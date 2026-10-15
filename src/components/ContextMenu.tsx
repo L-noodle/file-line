@@ -48,11 +48,10 @@ export default function ContextMenu({
 
   if (!menu) return null;
 
-  // 限制在窗口内
+  // 宽度方向约束；高度方向由 App 在菜单打开时临时加高窗口容纳
   const maxX = window.innerWidth - 230;
-  const maxY = window.innerHeight - 60 - menu.items.length * 34;
   const x = Math.min(menu.x, Math.max(8, maxX));
-  const y = Math.min(menu.y, Math.max(8, maxY));
+  const y = Math.max(8, menu.y);
 
   return (
     <div className="ctx-menu glass-strong" ref={ref} style={{ left: x, top: y }}>

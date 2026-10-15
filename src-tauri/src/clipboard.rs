@@ -176,8 +176,9 @@ pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
     let h = h_raw.unsigned_abs();
 
     let (r_shift, r_bits, g_shift, g_bits, b_shift, b_bits, alpha_ok) = if compression == 3 && bpp == 32 {
-        // BI_BITFIELDS：掩码紧跟头部
-        let base = if bi_size == 40 { 12 } else { 40 };
+        // BI_BITFIELDS：掩码永远紧跟 40 字节 BITMAPINFOHEADER
+        // （biSize=40 时在数据区开头；52/56/108/124 时内嵌于头部 offset 40）
+        let base = 40;
         if dib.len() < base + 12 {
             return None;
         }
@@ -185,7 +186,8 @@ pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
         let rm = mask(0);
         let gm = mask(4);
         let bm = mask(8);
-        let am = if bi_size >= 52 { mask(12) } else { 0 };
+        // 仅 56/108/124 头部带 alpha 掩码字段（52 变体的 offset 52 已是像素数据）
+        let am = if bi_size >= 56 { mask(12) } else { 0 };
         let decomp = |m: u32| -> (u32, u32) {
             if m == 0 {
                 return (0, 0);
@@ -200,8 +202,8 @@ pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
         let a_ok = am != 0 && dib.len() >= base + 16;
         (rs, rb, gs, gb, bs, bb, a_ok)
     } else if compression == 0 && (bpp == 24 || bpp == 32) {
-        // BI_RGB：32bpp 为 BGRA
-        (0, 8, 8, 8, 16, 8, bpp == 32)
+        // BI_RGB 32bpp 内存字节序 BGRA：按 LE u32 读取后 B 在低位、R 在 16 位处
+        (16, 8, 8, 8, 0, 8, bpp == 32)
     } else {
         return None; // 8bpp 调色板等不常见格式
     };

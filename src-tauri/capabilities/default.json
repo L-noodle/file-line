@@ -17,6 +17,7 @@
     "core:webview:default",
     "drag:default",
     "dialog:default",
+    "dialog:allow-confirm",
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled"

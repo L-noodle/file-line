@@ -24,8 +24,9 @@ export const api = {
   copyToClipboard: (path: string) => invoke<void>("copy_to_clipboard", { path }),
   setHitRects: (
     rects: [number, number, number, number][],
-    panelH: number
-  ) => invoke<void>("set_hit_rects", { rects, panelH }),
+    panelH: number,
+    scrollable: boolean
+  ) => invoke<void>("set_hit_rects", { rects, panelH, scrollable }),
   showRope: () => invoke<void>("show_rope"),
   hideRope: () => invoke<void>("hide_rope"),
   makeThumb: (path: string, maxPx: number) =>

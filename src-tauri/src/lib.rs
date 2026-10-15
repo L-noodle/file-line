@@ -1,4 +1,5 @@
 mod clipboard;
+mod filedrop;
 mod mousehook;
 mod thumbs;
 
@@ -36,9 +37,9 @@ impl SizeKey {
     }
     pub fn scale(&self) -> f64 {
         match self {
-            SizeKey::Small => 0.8,
-            SizeKey::Medium => 1.0,
-            SizeKey::Large => 1.35,
+            SizeKey::Small => 0.6,
+            SizeKey::Medium => 0.8,
+            SizeKey::Large => 1.0,
         }
     }
     /// 条带高度：photoMaxHeight(104*scale) + 106，与前端一致。
@@ -193,13 +194,18 @@ fn open_with_shell(path: &str) -> Result<(), String> {
     }
 }
 
-/// 另存为：把绳子上的文件复制到用户选择的文件夹（重名自动加序号），完成后打开该文件夹。
+/// 全部另存为：在用户选择的文件夹内新建「晾衣绳 + 年月日时分秒」子文件夹，
+/// 把绳子上的全部文件复制进去（重名自动加序号），完成后打开该子文件夹。
 #[tauri::command]
 fn save_to_folder(paths: Vec<String>, folder: String) -> Result<String, String> {
-    let dst_dir = PathBuf::from(&folder);
-    if !dst_dir.is_dir() {
+    let base = PathBuf::from(&folder);
+    if !base.is_dir() {
         return Err(format!("目标文件夹不存在：{folder}"));
     }
+    // 子文件夹名：晾衣绳 + 年月日时分秒（本地时间）
+    let stamp = chrono::Local::now().format("晾衣绳%Y%m%d%H%M%S");
+    let dst_dir = base.join(format!("{stamp}"));
+    fs::create_dir_all(&dst_dir).map_err(|e| format!("创建文件夹失败：{e}"))?;
     for p in &paths {
         let src = PathBuf::from(p);
         if !src.exists() {
@@ -227,9 +233,10 @@ fn save_to_folder(paths: Vec<String>, folder: String) -> Result<String, String> 
             let _ = fs::copy(&src, &dst);
         }
     }
-    // 打开文件夹让用户看到成果
-    let _ = open_with_shell(&folder);
-    Ok(folder)
+    // 打开新建的子文件夹让用户看到成果
+    let dst = dst_dir.to_string_lossy().to_string();
+    let _ = open_with_shell(&dst);
+    Ok(dst)
 }
 
 fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
@@ -255,8 +262,15 @@ fn copy_to_clipboard(path: String) -> Result<(), String> {
 
 /// 前端上报卡片命中区域（物理像素，屏幕坐标系），驱动点击穿透。
 #[tauri::command]
-fn set_hit_rects(app: AppHandle, rects: Vec<(f64, f64, f64, f64)>, panel_h: f64) {
-    mousehook::set_regions(&app, rects, panel_h);
+fn set_hit_rects(
+    app: AppHandle,
+    rects: Vec<(f64, f64, f64, f64)>,
+    panel_h: f64,
+    scrollable: bool,
+) {
+    mousehook::set_regions(&app, rects, panel_h, scrollable);
+    // 前端就绪后补注册 OLE 拖放（wry 只注册了初始子窗口，深层子窗口漏注册）
+    filedrop::install(&app);
 }
 
 #[tauri::command]
@@ -267,6 +281,7 @@ fn set_capture_override(on: bool) {
 /// 显示绳子窗口（截图 / 顶部拖拽触发）。
 #[tauri::command]
 fn show_rope(app: AppHandle) {
+    mousehook::set_revealed(true);
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_always_on_top(true);
@@ -276,8 +291,11 @@ fn show_rope(app: AppHandle) {
 /// 隐藏绳子窗口（滑出动画结束后调用）。
 #[tauri::command]
 fn hide_rope(app: AppHandle) {
+    mousehook::set_revealed(false);
     // 重置顶部触发状态：隐藏后鼠标再放顶部/再拖拽都能重新唤出
     mousehook::reset_triggers();
+    // 恢复条带窗口尺寸（右键菜单打开时可能临时加高过）
+    place_window(&app);
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.hide();
     }

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import Clothespin from "./Clothespin";
+import CardContent from "./CardContent";
 import { Spring } from "../spring";
-import { photoMaxHeight, ropeY, ROPE_TOP, PIN_ABOVE, SizeKey, cardWidth } from "../layout";
+import { photoMaxHeight, ropeY, ROPE_TOP, PIN_ABOVE, SizeKey, cardWidth, REVEAL_BASE, REVEAL_DUR, revealStagger } from "../layout";
 import { api } from "../api";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import type { Item } from "../types";
@@ -18,12 +19,20 @@ interface Props {
   falling?: boolean;
 }
 
-export default function PeggedCard({ item, index, width, size, x, onContextMenu, onRemove, falling }: Props) {
+export default function PeggedCard({ item, index, count, width, size, x, onContextMenu, onRemove, falling }: Props) {
+  // 滚动平移时 index/count 会变，但入场效果只应发生一次——
+  // 用 ref 读最新值，effect 不因 index 重跑（否则滚动时全绳重新摆动）
+  const indexRef = useRef(index);
+  const countRef = useRef(count);
+  indexRef.current = index;
+  countRef.current = count;
   const rotRef = useRef<HTMLDivElement>(null);
+  const enterRef = useRef<HTMLDivElement>(null);
   const springRef = useRef<Spring | null>(null);
   const [copied, setCopied] = useState(false);
   const [dragging, setDragging] = useState(false);
   const clickTimer = useRef<number>(0);
+  const lastClickT = useRef(0);
   const downPt = useRef<{ x: number; y: number; t: number; path: string } | null>(null);
   const dragStarted = useRef(false);
 
@@ -51,15 +60,29 @@ export default function PeggedCard({ item, index, width, size, x, onContextMenu,
       spring.nudge(d * (Math.random() > 0.5 ? 1 : -1));
     };
     window.addEventListener("gust", onGust);
-    // 绳子出现：轻风带动晃动，卡片从左到右波浪式延迟
+    // 绳子出现：从左到右波浪式浮现，每张挂上后明显晃动几下
     let revealTimer = 0;
     const onReveal = () => {
-      revealTimer = window.setTimeout(
-        () => {
-          spring.nudge((0.8 + Math.random() * 0.9) * (Math.random() > 0.5 ? 1 : -1));
+      // 等面板滑入（280ms 缓出）尾段再开始，否则 stagger 会被整体滑入掩盖
+      // 错峰用 revealStagger：左侧卡片出现快，往右逐渐放缓（由快转慢）
+      const delay = REVEAL_BASE + revealStagger(indexRef.current, countRef.current);
+      enterRef.current?.animate(
+        [
+          { opacity: 0, transform: "translateY(-14px) scale(0.96)" },
+          { opacity: 1, transform: "translateY(0) scale(1)" },
+        ],
+        {
+          duration: REVEAL_DUR,
+          delay,
+          easing: "cubic-bezier(0.2, 0.9, 0.3, 1.1)",
+          fill: "backwards", // delay 期间保持初始帧（隐藏）
         },
-        index * 45 + Math.random() * 50
       );
+      // 浮现尾段：速度脉冲让卡片明显摆动（≈4~6°起摆，欠阻尼晃 2~3 个周期停住），
+      // 像刚被挂上绳子的晃动；方向 / 幅度随机，每张不同更真实
+      revealTimer = window.setTimeout(() => {
+        spring.nudge((28 + Math.random() * 14) * (Math.random() > 0.5 ? 1 : -1));
+      }, delay + 200);
     };
     window.addEventListener("rope-reveal", onReveal);
     return () => {
@@ -69,7 +92,7 @@ export default function PeggedCard({ item, index, width, size, x, onContextMenu,
       window.removeEventListener("rope-reveal", onReveal);
       spring.destroy();
     };
-  }, [tilt, index]);
+  }, [tilt]);
 
   const doCopy = async () => {
     try {
@@ -115,76 +138,20 @@ export default function PeggedCard({ item, index, width, size, x, onContextMenu,
     if (e.button !== 0) return;
     const now = performance.now();
     if (now - d.t > 600) return; // 长按忽略
-    if (e.detail === 2) {
-      // 双击：默认程序打开
+    // 双击（PointerEvent.detail 恒为 0，须自行计时）：两次弹起间隔 < 300ms
+    if (now - lastClickT.current < 300) {
+      lastClickT.current = 0;
       window.clearTimeout(clickTimer.current);
       api.openPath(item.path).catch(console.error);
       return;
     }
+    lastClickT.current = now;
     // 单击：延迟触发复制，期间来第二击则取消
     window.clearTimeout(clickTimer.current);
-    clickTimer.current = window.setTimeout(doCopy, 260);
+    clickTimer.current = window.setTimeout(doCopy, 300);
   };
 
   const pinY = ropeY(x, width) - PIN_ABOVE;
-  const content = () => {
-    if (item.thumb?.kind === "image" && item.thumb.b64) {
-      return (
-        <img
-          className="card-img"
-          src={`data:image/png;base64,${item.thumb.b64}`}
-          alt={item.name}
-          draggable={false}
-        />
-      );
-    }
-    if (item.thumb?.kind === "folder") {
-      return (
-        <div className="card-tile folder">
-          {item.thumb.b64 ? (
-            <img
-              className="folder-img"
-              src={`data:image/png;base64,${item.thumb.b64}`}
-              alt={item.name}
-              draggable={false}
-            />
-          ) : (
-            <svg viewBox="0 0 48 40" className="folder-icon" aria-hidden>
-              <path d="M2 8a4 4 0 0 1 4-4h10l5 5h21a4 4 0 0 1 4 4v21a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z" />
-              <path d="M2 13h44v4H2z" fill="rgba(0,0,0,0.08)" />
-            </svg>
-          )}
-          <div className="card-name">{item.name}</div>
-        </div>
-      );
-    }
-    if (item.thumb?.b64) {
-      return (
-        <div className="card-tile file">
-          <img
-            className="file-img"
-            src={`data:image/png;base64,${item.thumb.b64}`}
-            alt={item.name}
-            draggable={false}
-          />
-          <div className="card-name">{item.name}</div>
-        </div>
-      );
-    }
-    const ext = item.name.includes(".")
-      ? item.name.split(".").pop()!.toUpperCase().slice(0, 4)
-      : "FILE";
-    return (
-      <div className="card-tile file">
-        <svg viewBox="0 0 36 44" className="file-icon" aria-hidden>
-          <path d="M4 4a3 3 0 0 1 3-3h14l11 11v28a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V4z" />
-          <path d="M21 1l11 11H21V1z" fill="rgba(255,255,255,0.45)" />
-        </svg>
-        <div className="file-ext">{ext}</div>
-        <div className="card-name">{item.name}</div>
-      </div>
-    );
-  };
 
   return (
     <div
@@ -197,7 +164,9 @@ export default function PeggedCard({ item, index, width, size, x, onContextMenu,
         zIndex: 10 + item.index + (falling ? 200 : 0),
       }}
     >
-      <div className="pegged-rot" ref={rotRef}>
+      {/* 入场层：reveal 时 Web Animations 播放陆续浮现（独立于 slot 的 dropIn/falling 与 rot 的弹簧） */}
+      <div className="pegged-enter" ref={enterRef}>
+        <div className="pegged-rot" ref={rotRef}>
         <Clothespin />
         <div
           className="card glass"
@@ -206,7 +175,7 @@ export default function PeggedCard({ item, index, width, size, x, onContextMenu,
           onPointerUp={onPointerUp}
           onContextMenu={(e) => onContextMenu(e, item)}
         >
-          {content()}
+          <CardContent item={item} />
           {copied && <div className="copied-tip">已复制</div>}
           <button
             className="card-x"
@@ -228,6 +197,7 @@ export default function PeggedCard({ item, index, width, size, x, onContextMenu,
               />
             </svg>
           </button>
+        </div>
         </div>
       </div>
     </div>

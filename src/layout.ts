@@ -6,8 +6,21 @@ export type SizeKey = "small" | "medium" | "large";
 export const ROPE_TOP = 10;
 export const PIN_ABOVE = 9.5; // 衣夹顶相对绳的偏移
 
+// rope-reveal 入场时序：卡片从左到右"由快转慢"地浮现——
+// 左侧卡片挨得紧、出现节奏快，越往右间隔越大、节奏放缓（pow 1.5 分布）。
+// 左右折叠堆叠复用同一时间轴（左堆叠最先、右堆叠最后）。
+export const REVEAL_BASE = 200; // 首张卡片延迟（等面板滑入尾段）
+export const REVEAL_SPAN = 340; // 全部卡片错峰的总时长（count ≥ 2）
+export const REVEAL_DUR = 220; // 单张浮现动画时长
+
+/** 第 index 张卡片的错峰延迟：前密后疏，由快转慢。 */
+export function revealStagger(index: number, count: number): number {
+  if (count <= 1) return 0;
+  return Math.pow(index / (count - 1), 1.5) * REVEAL_SPAN;
+}
+
 export function scaleOf(size: SizeKey): number {
-  return size === "small" ? 0.8 : size === "large" ? 1.35 : 1;
+  return size === "small" ? 0.6 : size === "large" ? 1.0 : 0.8;
 }
 
 export function photoMaxHeight(size: SizeKey): number {
@@ -27,8 +40,8 @@ export function panelHeight(size: SizeKey): number {
 }
 
 export function sag(width: number): number {
-  // 基础下垂 + 20px：弧的最低点再往下 20px，端点不变
-  return Math.min(30, width * 0.018) + 20;
+  // 基础下垂（限制最大 30px），弧度平缓
+  return Math.min(30, width * 0.018);
 }
 
 export function ropeY(x: number, width: number): number {

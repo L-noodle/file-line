@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import Rope from "./components/Rope";
 import PeggedCard from "./components/PeggedCard";
 import Clothespin from "./components/Clothespin";
@@ -14,6 +15,9 @@ import {
   panelHeight,
   photoMaxHeight,
   PIN_ABOVE,
+  REVEAL_BASE,
+  REVEAL_DUR,
+  revealStagger,
   ropeY,
   SizeKey,
   spacing,
@@ -31,20 +35,25 @@ export default function App() {
   const [revealed, setRevealed] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [width, setWidth] = useState(window.innerWidth);
+  const [dragHover, setDragHover] = useState(false); // 外部拖拽悬停在可放置区（绳子彩色流动反馈）
+  const [scrollPx, setScrollPx] = useState(0); // 滚轮回看偏移 px（0 = 最新卡片靠右）
+  const wheelAccRef = useRef(0); // 滚轮累积量（触控板小步事件合并防抖）
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef(0);
   const menuRef = useRef<MenuState | null>(null);
   menuRef.current = menu;
+  // 右键菜单打开时窗口是否被临时加高（菜单高度动态，可能超出条带窗口）
+  const menuExpandedRef = useRef(false);
 
   // ---------- 显示 / 隐藏状态机 ----------
   const revealedRef = useRef(false);
   revealedRef.current = revealed;
   const hoverRef = useRef(false); // 鼠标是否在面板区域内
   const dragActiveRef = useRef(false); // 正在拖拽卡片
-  const hideTimer = useRef(0); // 3s 闲置计时
+  const hideTimer = useRef(0); // 闲置计时
   const animTimer = useRef(0); // 滑出动画后隐藏窗口
-  const HIDE_DELAY = 3000;
-  const ANIM_MS = 330;
+  const HIDE_DELAY = 4000;
+  const ANIM_MS = 1330;
 
   const cancelHide = useCallback(() => {
     window.clearTimeout(hideTimer.current);
@@ -93,7 +102,11 @@ export default function App() {
     (async () => {
       try {
         const st = await api.getState();
-        if (st.size === "small" || st.size === "medium" || st.size === "large") {
+        if (
+          st.size === "small" ||
+          st.size === "medium" ||
+          st.size === "large"
+        ) {
           setSize(st.size);
         }
         if (Array.isArray(st.items)) {
@@ -115,7 +128,11 @@ export default function App() {
       reveal(); // 截图进剪贴板 → 唤出绳子
     });
     const un2 = listen<string>("size-changed", (e) => {
-      if (e.payload === "small" || e.payload === "medium" || e.payload === "large") {
+      if (
+        e.payload === "small" ||
+        e.payload === "medium" ||
+        e.payload === "large"
+      ) {
         setSize(e.payload);
       }
     });
@@ -143,25 +160,51 @@ export default function App() {
     window.addEventListener("card-drag-start", onDragStart);
     window.addEventListener("card-drag-end", onDragEnd);
     // 拖入文件 / 文件夹
+    let wiggleDone = false; // 一次拖拽会话只抖一次
     const un4 = getCurrentWebview().onDragDropEvent((e) => {
-      if (e.payload.type === "drop") {
+      if (e.payload.type === "enter") {
+        wiggleDone = false;
+      } else if (e.payload.type === "over" && !wiggleDone) {
+        wiggleDone = true;
+        window.dispatchEvent(new CustomEvent("rope-wiggle"));
+      } else if (e.payload.type === "drop") {
         addPaths(e.payload.paths, "drag");
         reveal();
+      } else if (e.payload.type === "leave") {
+        wiggleDone = false;
       }
     });
     const onResize = () => setWidth(window.innerWidth);
     window.addEventListener("resize", onResize);
+    // 原生 OLE 补注册通道（深层子窗口 drop 直达，绕过 wry 缺失的注册）
+    // enter/leave：拖拽悬停/离开可放置区 → 绳子彩色流动反馈
+    const un7 = listen<{ paths: string[]; type?: string }>(
+      "native-drop",
+      (e) => {
+        const ty = e.payload.type ?? "drop";
+        if (ty === "enter") {
+          setDragHover(true);
+          cancelHide();
+        } else if (ty === "leave") {
+          setDragHover(false);
+        } else {
+          addPaths(e.payload.paths, "drag");
+          setDragHover(false);
+          reveal();
+        }
+      },
+    );
     // 阵风：7~16s 随机摆动
     let gustTimer = 0;
     const scheduleGust = () => {
       gustTimer = window.setTimeout(
         () => {
           window.dispatchEvent(
-            new CustomEvent("gust", { detail: 1.6 + Math.random() * 1.8 })
+            new CustomEvent("gust", { detail: 1.6 + Math.random() * 1.8 }),
           );
           scheduleGust();
         },
-        7000 + Math.random() * 9000
+        7000 + Math.random() * 9000,
       );
     };
     scheduleGust();
@@ -172,6 +215,7 @@ export default function App() {
       un4.then((f) => f());
       un5.then((f) => f());
       un6.then((f) => f());
+      un7.then((f) => f());
       window.removeEventListener("card-drag-start", onDragStart);
       window.removeEventListener("card-drag-end", onDragEnd);
       window.removeEventListener("resize", onResize);
@@ -204,8 +248,10 @@ export default function App() {
       source,
     };
     setItems((prev) =>
-      prev.some((p) => p.path === path) ? prev : [...prev, item]
+      prev.some((p) => p.path === path) ? prev : [...prev, item],
     );
+    // 新卡片进绳：回到最右端（最新）
+    setScrollPx(0);
   }, []);
 
   const addPaths = useCallback(
@@ -214,10 +260,10 @@ export default function App() {
         await addItem(p, source);
       }
     },
-    [addItem]
+    [addItem],
   );
 
-  // 持久化
+  // 持久化（items 或样式变化时）
   useEffect(() => {
     api
       .saveState(items.map((i) => ({ path: i.path, source: i.source })))
@@ -231,14 +277,11 @@ export default function App() {
   const removeItems = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
     setFallingIds((prev) => Array.from(new Set([...prev, ...ids])));
-    window.setTimeout(
-      () => {
-        const s = new Set(ids);
-        setItems((prev) => prev.filter((i) => !s.has(i.id)));
-        setFallingIds((prev) => prev.filter((f) => !s.has(f)));
-      },
-      680
-    );
+    window.setTimeout(() => {
+      const s = new Set(ids);
+      setItems((prev) => prev.filter((i) => !s.has(i.id)));
+      setFallingIds((prev) => prev.filter((f) => !s.has(f)));
+    }, 680);
   }, []);
 
   const openCardMenu = (e: React.MouseEvent, item: Item) => {
@@ -253,7 +296,7 @@ export default function App() {
       y: e.clientY,
       items: [
         {
-          label: "打开",
+          label: "打开（双击）",
           onClick: () => api.openPath(item.path).catch(console.error),
         },
         // 仅拖拽进入的文件展示（剪贴板落地的是临时文件，定位无意义）
@@ -287,9 +330,17 @@ export default function App() {
           : []),
         { separator: true },
         {
-          label: "另存为",
+          label: "全部另存为",
           disabled: items.length === 0,
           onClick: async () => {
+            // 卡片里包含文件夹：递归复制可能有大数据量，先让用户确认
+            if (items.some((i) => i.kind === "folder")) {
+              const ok = await confirm(
+                "卡片中包含文件夹，另存时将递归复制其全部内容，可能涉及大数据量复制。是否继续？",
+                { title: "全部另存为", kind: "warning" },
+              );
+              if (!ok) return;
+            }
             const folder = await openDialog({
               directory: true,
               title: "选择保存位置",
@@ -298,7 +349,7 @@ export default function App() {
             try {
               const saved = await api.saveToFolder(
                 items.map((i) => i.path),
-                folder
+                folder,
               );
               removeItems(items.map((i) => i.id));
               showToast(`已另存到：${saved}`);
@@ -309,33 +360,102 @@ export default function App() {
           },
         },
         {
-          label: "清空绳子",
+          label: "清空卡片",
           disabled: items.length === 0,
           danger: true,
-          bold: true,
           onClick: () => removeItems(items.map((i) => i.id)),
         },
       ],
     });
   };
 
-  // 菜单打开期间：强制窗口可交互（防止穿透吞掉菜单点击）；关闭后重新计时闲置隐藏
+  // 菜单打开期间：强制窗口可交互（防止穿透吞掉菜单点击）；菜单条目数动态，
+  // 可能超出条带窗口底部 → 临时加高透明窗口容纳，关闭后恢复条带高度
   useEffect(() => {
     invoke("set_capture_override", { on: !!menu }).catch(() => {});
-    if (menu) cancelHide();
-    else scheduleHide();
+    if (menu) {
+      cancelHide();
+      const need = menu.y + menu.items.length * 34 + 72;
+      if (need > window.innerHeight) {
+        menuExpandedRef.current = true;
+        getCurrentWindow()
+          .setSize(new LogicalSize(window.innerWidth, Math.ceil(need)))
+          .catch(console.error);
+      }
+    } else {
+      if (menuExpandedRef.current) {
+        menuExpandedRef.current = false;
+        getCurrentWindow()
+          .setSize(new LogicalSize(window.innerWidth, panelHeight(size)))
+          .catch(console.error);
+      }
+      scheduleHide();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menu]);
 
-  // ---------- 布局 ----------
+  // ---------- 布局（滚轮像素级回看，scrollPx=0 时最新卡片靠右） ----------
   const capacity = visibleCapacity(width, size);
   const visCount = Math.min(items.length, capacity);
+  const maxScroll = Math.max(0, items.length - visCount);
+  const sp = spacing(size);
+  const maxScrollPx = maxScroll * sp;
+  // 删卡片后 clamp；sc 为浮点"卡单位"，startFloat 连续移动可见窗口
+  const sc = Math.min(scrollPx, maxScrollPx) / sp;
+  const startFloat = maxScroll - sc;
+  const start = Math.floor(startFloat);
+  // 子格偏移：所有可见卡整体左移 frac 格；凑满一格时窗口切换，
+  // 新卡才从折叠区挂进来（徽章数量与折叠同步变化）
+  const shiftPx = (startFloat - start) * sp;
   const visibleItems = items
-    .slice(items.length - visCount)
+    .slice(start, start + visCount)
     .map((it, i) => ({ item: it, i }));
-  const folded = items.slice(0, Math.max(0, items.length - visCount));
-  const fanX = width / 2 - ((visCount - 1) / 2) * spacing(size) - spacing(size) - 10;
+  const folded = items.slice(0, start);
+  const foldedRight = items.slice(start + visCount);
+  const halfSpan = ((visCount - 1) / 2) * spacing(size);
+  // 左右折叠堆叠与可见区对称摆放（各留一格间距），
+  // 并 clamp 到距屏幕边界 ≥ 20px（窄屏 / 半屏时不再贴边出屏）
+  const FAN_EDGE = 20;
+  const fanX = Math.max(
+    FAN_EDGE + cardWidth(size) / 2,
+    width / 2 - halfSpan - spacing(size) - 10
+  );
+  const fanXRight = Math.min(
+    width - FAN_EDGE - cardWidth(size) / 2,
+    width / 2 + halfSpan + spacing(size) + 10
+  );
   const panelH = panelHeight(size);
+
+  // ---------- 滚轮：像素级平滑回看（凑满一格卡片才从折叠区出来） ----------
+  // 卡片上滚动（WebView 原生 wheel）与条带空白区滚动（panel-wheel 转发）共用
+  const applyWheel = useCallback(
+    (dy: number, dx: number) => {
+      if (maxScroll <= 0) return;
+      cancelHide();
+      wheelAccRef.current += dy + dx;
+      // 触控板小步事件累积到阈值才生效，避免高频抖动
+      const TH = 24;
+      if (Math.abs(wheelAccRef.current) < TH) return;
+      const acc = wheelAccRef.current;
+      wheelAccRef.current = 0;
+      setScrollPx((s) => Math.max(0, Math.min(maxScrollPx, s + acc)));
+    },
+    [maxScroll, maxScrollPx, cancelHide]
+  );
+
+  // 条带区域内（含空白穿透区）滚轮：Rust 鼠标钩子转发而来
+  useEffect(() => {
+    const un = listen<[number, number]>("panel-wheel", (e) => {
+      if (!revealedRef.current) return;
+      const [dx, dy] = e.payload;
+      applyWheel(dy, dx);
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, [applyWheel]);
+
+  const onWheel = (e: React.WheelEvent) => applyWheel(e.deltaY, e.deltaX);
 
   // ---------- 命中区上报 ----------
   useEffect(() => {
@@ -344,14 +464,17 @@ export default function App() {
     const rects: [number, number, number, number][] = [];
     if (revealed) {
       for (const v of visibleItems) {
-        const cx = visibleX(v.i, visCount, width, size);
+        const cx = visibleX(v.i, visCount, width, size) - shiftPx;
         const y = ropeY(cx, width) - PIN_ABOVE;
         // 贴合卡片实际 DOM：衣夹 26px + 卡片约 ph+8，只留少量 hover 放大余量，
         // 避免吞掉卡片下方/两侧的鼠标事件（桌面内容保持正常 hover）
         rects.push([cx - cw / 2 - 3, y, cw + 6, 26 + ph + 18]);
       }
       if (folded.length > 0) {
-        rects.push([fanX - 48, 24, 96, 104]);
+        rects.push([fanX - (cw + 16) / 2, 18, cw + 16, ph + 66]);
+      }
+      if (foldedRight.length > 0) {
+        rects.push([fanXRight - (cw + 16) / 2, 18, cw + 16, ph + 66]);
       }
       if (items.length === 0) {
         // 空绳装饰：中间夹着的小图
@@ -360,12 +483,16 @@ export default function App() {
         rects.push([cx - 55, py - 4, 110, 100]);
       }
     }
-    api.setHitRects(rects, panelH).catch(console.error);
-  }, [items, width, size, revealed, menu]);
+    api.setHitRects(rects, panelH, maxScroll > 0).catch(console.error);
+  }, [items, width, size, revealed, menu, scrollPx]);
 
   return (
-    <div className={"panel" + (revealed ? "" : " hidden")} style={{ height: panelH }}>
-      <Rope width={width} />
+    <div
+      className={"panel" + (revealed ? "" : " hidden")}
+      style={{ height: panelH }}
+      onWheel={onWheel}
+    >
+      <Rope width={width} active={dragHover} />
       {items.length === 0 && (
         <div
           className="empty-peg"
@@ -381,10 +508,20 @@ export default function App() {
           />
         </div>
       )}
+      {/* 入场时序：左堆叠先于首卡浮现，右堆叠等所有卡片浮现完最后出现 */}
       <OverflowFan
         items={folded}
         x={fanX}
-        onOpen={(it) => api.openPath(it.path).catch(console.error)}
+        size={size}
+        revealDelay={REVEAL_BASE - 40}
+      />
+      <OverflowFan
+        items={foldedRight}
+        x={fanXRight}
+        size={size}
+        revealDelay={
+          REVEAL_BASE + revealStagger(visCount - 1, visCount) + REVEAL_DUR
+        }
       />
       {visibleItems.map(({ item, i }) => (
         <PeggedCard
@@ -394,7 +531,7 @@ export default function App() {
           count={visCount}
           width={width}
           size={size}
-          x={visibleX(i, visCount, width, size)}
+          x={visibleX(i, visCount, width, size) - shiftPx}
           onContextMenu={openCardMenu}
           onRemove={(id) => removeItems([id])}
           falling={fallingIds.includes(item.id)}
