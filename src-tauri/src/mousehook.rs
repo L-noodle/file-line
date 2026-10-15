@@ -77,6 +77,11 @@ pub fn set_revealed(on: bool) {
     REVEALED.store(on, Ordering::SeqCst);
 }
 
+/// 面板当前是否显示（启动预热结束时判断是否该隐藏窗口）。
+pub fn is_revealed() -> bool {
+    REVEALED.load(Ordering::SeqCst)
+}
+
 /// 前端上报：卡片命中区（窗口逻辑坐标，窗口位于屏幕原点）+ 条带高度 + 是否可滚动。
 pub fn set_regions(
     app: &AppHandle,
@@ -229,7 +234,9 @@ pub fn start(app: AppHandle) {
 
                 if !TOP_SHOWN.load(Ordering::SeqCst) && TOP_ACTIVE.load(Ordering::SeqCst) {
                     let since = TOP_SINCE.load(Ordering::SeqCst);
-                    if since > 0 && now_ms().saturating_sub(since) >= 300 {
+                    // 拖文件进顶部是明确意图：停留 150ms 即唤出，
+                    // 缩短"窗口还在显示中就松手导致 drop 落空"的时间窗
+                    if since > 0 && now_ms().saturating_sub(since) >= 150 {
                         if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
                             let _ = app.emit("show-rope", ());
                         }

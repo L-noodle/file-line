@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize, currentMonitor } from "@tauri-apps/api/window";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import Rope from "./components/Rope";
 import PeggedCard from "./components/PeggedCard";
 import Clothespin from "./components/Clothespin";
 import OverflowFan from "./components/OverflowFan";
 import ContextMenu, { MenuState } from "./components/ContextMenu";
+import HelpDialog from "./components/HelpDialog";
 import type { Item } from "./types";
 import { api } from "./api";
 import {
@@ -29,11 +30,17 @@ import { invoke } from "@tauri-apps/api/core";
 let seq = 1;
 const nextId = () => `i${seq++}`;
 
+// 使用说明弹窗矩形（窗口逻辑坐标）。弹窗打开时窗口临时全屏化，
+// 弹窗可全屏随意拖动；该矩形作为点击命中区上报（弹窗外保持穿透）
+type HelpRect = { x: number; y: number; w: number; h: number };
+
 export default function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [size, setSize] = useState<SizeKey>("medium");
   const [revealed, setRevealed] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false); // 使用说明弹窗（托盘菜单触发）
+  const [helpRect, setHelpRect] = useState<HelpRect | null>(null); // 弹窗当前矩形（驱动命中区上报）
   const [width, setWidth] = useState(window.innerWidth);
   const [dragHover, setDragHover] = useState(false); // 外部拖拽悬停在可放置区（绳子彩色流动反馈）
   const [scrollPx, setScrollPx] = useState(0); // 滚轮回看偏移 px（0 = 最新卡片靠右）
@@ -42,17 +49,23 @@ export default function App() {
   const toastTimer = useRef(0);
   const menuRef = useRef<MenuState | null>(null);
   menuRef.current = menu;
+  const helpOpenRef = useRef(false);
+  helpOpenRef.current = helpOpen;
   // 右键菜单打开时窗口是否被临时加高（菜单高度动态，可能超出条带窗口）
   const menuExpandedRef = useRef(false);
+  // 使用说明弹窗打开期间窗口是否被临时全屏化
+  const helpFullRef = useRef(false);
 
   // ---------- 显示 / 隐藏状态机 ----------
   const revealedRef = useRef(false);
   revealedRef.current = revealed;
   const hoverRef = useRef(false); // 鼠标是否在面板区域内
   const dragActiveRef = useRef(false); // 正在拖拽卡片
+  const dragHoverRef = useRef(false); // 外部拖拽悬停在可放置区（OLE enter/leave）
+  dragHoverRef.current = dragHover;
   const hideTimer = useRef(0); // 闲置计时
   const animTimer = useRef(0); // 滑出动画后隐藏窗口
-  const HIDE_DELAY = 4000;
+  const HIDE_DELAY = 2000;
   const ANIM_MS = 1330;
 
   const cancelHide = useCallback(() => {
@@ -64,6 +77,7 @@ export default function App() {
     if (!revealedRef.current) return;
     cancelHide();
     setRevealed(false);
+    setHelpOpen(false); // 收起绳子时一并关闭使用说明弹窗
     // 等滑出动画结束后隐藏窗口
     animTimer.current = window.setTimeout(() => {
       if (revealedRef.current) return; // 期间又被唤起
@@ -74,7 +88,7 @@ export default function App() {
   const scheduleHide = useCallback(() => {
     window.clearTimeout(hideTimer.current);
     if (!revealedRef.current) return;
-    if (hoverRef.current || dragActiveRef.current || menuRef.current) return;
+    if (hoverRef.current || dragActiveRef.current || dragHoverRef.current || menuRef.current || helpOpenRef.current) return;
     hideTimer.current = window.setTimeout(hideNow, HIDE_DELAY);
   }, [hideNow]);
 
@@ -142,6 +156,11 @@ export default function App() {
     });
     // 拖拽文件到屏幕顶部 100px 持续 0.3s → 显示
     const un5 = listen("show-rope", () => reveal());
+    // 托盘菜单「使用说明」：唤出绳子并弹出说明弹窗
+    const un8 = listen("show-help", () => {
+      reveal();
+      setHelpOpen(true);
+    });
     // 鼠标进入 / 离开面板区域（驱动闲置隐藏）
     const un6 = listen<boolean>("panel-hover", (e) => {
       hoverRef.current = !!e.payload;
@@ -216,6 +235,7 @@ export default function App() {
       un5.then((f) => f());
       un6.then((f) => f());
       un7.then((f) => f());
+      un8.then((f) => f());
       window.removeEventListener("card-drag-start", onDragStart);
       window.removeEventListener("card-drag-end", onDragEnd);
       window.removeEventListener("resize", onResize);
@@ -369,30 +389,59 @@ export default function App() {
     });
   };
 
-  // 菜单打开期间：强制窗口可交互（防止穿透吞掉菜单点击）；菜单条目数动态，
+  // 右键菜单打开期间：强制窗口可交互（防止穿透吞掉菜单点击）；菜单条目数动态，
   // 可能超出条带窗口底部 → 临时加高透明窗口容纳，关闭后恢复条带高度
   useEffect(() => {
     invoke("set_capture_override", { on: !!menu }).catch(() => {});
     if (menu) {
       cancelHide();
-      const need = menu.y + menu.items.length * 34 + 72;
-      if (need > window.innerHeight) {
-        menuExpandedRef.current = true;
-        getCurrentWindow()
-          .setSize(new LogicalSize(window.innerWidth, Math.ceil(need)))
-          .catch(console.error);
+      // 弹窗打开时窗口已全屏化，无需再加高
+      if (!helpFullRef.current) {
+        const need = menu.y + menu.items.length * 34 + 72;
+        if (need > window.innerHeight) {
+          menuExpandedRef.current = true;
+          getCurrentWindow()
+            .setSize(new LogicalSize(window.innerWidth, Math.ceil(need)))
+            .catch(console.error);
+        }
       }
     } else {
       if (menuExpandedRef.current) {
         menuExpandedRef.current = false;
-        getCurrentWindow()
-          .setSize(new LogicalSize(window.innerWidth, panelHeight(size)))
-          .catch(console.error);
+        // 弹窗仍开着则保持全屏，恢复留给弹窗关闭时处理
+        if (!helpFullRef.current) {
+          invoke("window_resized").catch(console.error);
+        }
       }
       scheduleHide();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menu]);
+
+  // 使用说明弹窗：打开时窗口临时全屏化，弹窗即可拖到屏幕任意位置；
+  // 关闭后恢复条带窗口（重新铺满顶部）
+  useEffect(() => {
+    if (helpOpen) {
+      cancelHide();
+      helpFullRef.current = true;
+      (async () => {
+        const mon = await currentMonitor();
+        const win = getCurrentWindow();
+        if (mon) {
+          await win.setPosition(mon.position);
+          await win.setSize(mon.size);
+        }
+      })().catch(console.error);
+    } else {
+      if (helpFullRef.current) {
+        helpFullRef.current = false;
+        setHelpRect(null);
+        invoke("window_resized").catch(console.error);
+      }
+      scheduleHide();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [helpOpen]);
 
   // ---------- 布局（滚轮像素级回看，scrollPx=0 时最新卡片靠右） ----------
   const capacity = visibleCapacity(width, size);
@@ -459,6 +508,19 @@ export default function App() {
 
   // ---------- 命中区上报 ----------
   useEffect(() => {
+    if (helpRect) {
+      // 弹窗打开：窗口已全屏化，只报弹窗矩形（留 16px hover 余量），
+      // 其余区域穿透；panel_h=0 关闭"按住左键拖入"兜底与滚轮拦截，
+      // 避免全屏窗口截获其他拖拽/滚动
+      api
+        .setHitRects(
+          [[helpRect.x - 16, helpRect.y - 16, helpRect.w + 32, helpRect.h + 32]],
+          0,
+          false,
+        )
+        .catch(console.error);
+      return;
+    }
     const cw = cardWidth(size);
     const ph = photoMaxHeight(size);
     const rects: [number, number, number, number][] = [];
@@ -484,7 +546,7 @@ export default function App() {
       }
     }
     api.setHitRects(rects, panelH, maxScroll > 0).catch(console.error);
-  }, [items, width, size, revealed, menu, scrollPx]);
+  }, [items, width, size, revealed, menu, scrollPx, helpRect]);
 
   return (
     <div
@@ -538,6 +600,19 @@ export default function App() {
         />
       ))}
       <ContextMenu menu={menu} onClose={() => setMenu(null)} />
+      {helpOpen && (
+        <HelpDialog
+          onRect={setHelpRect}
+          onDragStart={() =>
+            invoke("set_capture_override", { on: true }).catch(() => {})
+          }
+          onDragEnd={() =>
+            // 菜单还开着则保持强制可交互，否则恢复命中区驱动
+            invoke("set_capture_override", { on: !!menuRef.current }).catch(() => {})
+          }
+          onClose={() => setHelpOpen(false)}
+        />
+      )}
       {toast && <div className="toast glass-strong">{toast}</div>}
     </div>
   );

@@ -261,6 +261,9 @@ fn copy_to_clipboard(path: String) -> Result<(), String> {
 }
 
 /// 前端上报卡片命中区域（物理像素，屏幕坐标系），驱动点击穿透。
+/// 首次 set_hit_rects 时补注册 OLE 拖放（只跑一次，后续由 show_rope / 预热重装）。
+static DROP_INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[tauri::command]
 fn set_hit_rects(
     app: AppHandle,
@@ -269,8 +272,12 @@ fn set_hit_rects(
     scrollable: bool,
 ) {
     mousehook::set_regions(&app, rects, panel_h, scrollable);
-    // 前端就绪后补注册 OLE 拖放（wry 只注册了初始子窗口，深层子窗口漏注册）
-    filedrop::install(&app);
+    // 前端就绪后补注册 OLE 拖放（wry 只注册了初始子窗口，深层子窗口漏注册）。
+    // RegisterDragDrop 要求主线程（OLE STA）
+    if !DROP_INSTALLED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        let app2 = app.clone();
+        let _ = app.run_on_main_thread(move || filedrop::install(&app2));
+    }
 }
 
 #[tauri::command]
@@ -285,6 +292,15 @@ fn show_rope(app: AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_always_on_top(true);
+        // 窗口从隐藏恢复显示时 WebView2 会异步销毁/重建深层子窗口（drop 目标所在）。
+        // 立即重装太早（子窗口还没建好），延迟 350ms 到主线程幂等重装：
+        // REGISTERED 命中的窗口用 OLE 属性验证注册存活，HWND 复用也能正确重注册
+        let app2 = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(350));
+            let app3 = app2.clone();
+            let _ = app2.run_on_main_thread(move || filedrop::install(&app3));
+        });
     }
 }
 
@@ -357,6 +373,28 @@ pub fn run() {
             // 初始完全穿透，等待前端上报命中区
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_ignore_cursor_events(true);
+                // 预热：不激活地显示一次（窗口全透明 + 穿透 + 内容移出视口，用户无感），
+                // 让 WebView2 完成首次渲染——深层子窗口（拖放目标）此刻才创建。
+                // 1.5s 后隐藏；期间若已唤出（REVEALED）则不隐藏。
+                // drop target 无需此刻安装：hide 时子窗口销毁注册随之作废，
+                // 唤出时 show_rope 会延迟重装（幂等 + 存活性验证）
+                if let Ok(h) = win.hwnd() {
+                    use windows::Win32::Foundation::HWND;
+                    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
+                    unsafe { let _ = ShowWindow(HWND(h.0 as *mut _), SW_SHOWNOACTIVATE); };
+                }
+                let app2 = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    let app3 = app2.clone();
+                    let _ = app2.run_on_main_thread(move || {
+                        if !mousehook::is_revealed() {
+                            if let Some(w) = app3.get_webview_window("main") {
+                                let _ = w.hide();
+                            }
+                        }
+                    });
+                });
             }
             build_tray(app.handle())?;
             clipboard::start_watcher(app.handle().clone());
@@ -380,11 +418,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let small = CheckMenuItem::with_id(app, "size-small", "小", true, *cur_size == SizeKey::Small, None::<&str>)?;
     let medium = CheckMenuItem::with_id(app, "size-medium", "中（默认）", true, *cur_size == SizeKey::Medium, None::<&str>)?;
     let large = CheckMenuItem::with_id(app, "size-large", "大", true, *cur_size == SizeKey::Large, None::<&str>)?;
+    let help = MenuItem::with_id(app, "help", "使用说明", true, None::<&str>)?;
     let sep = tauri::menu::PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
     let size_menu = Submenu::with_items(app, "卡片大小", true, &[&small, &medium, &large])?;
-    let menu = Menu::with_items(app, &[&autostart, &sep, &size_menu, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&autostart, &sep, &size_menu, &help, &sep, &quit])?;
     drop(cur_size);
     drop(app_state);
 
@@ -403,6 +442,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(move |app, event| {
             let id = event.id().as_ref().to_string();
             match id.as_str() {
+                "help" => {
+                    // 弹出使用说明：由前端渲染与卡片同款的弹窗
+                    let _ = app.emit("show-help", ());
+                }
                 "quit" => {
                     if let Some(win) = app.get_webview_window("main") {
                         let _ = win.hide();

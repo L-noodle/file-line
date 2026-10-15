@@ -628,3 +628,123 @@ body,
     color: #eee;
   }
 }
+
+/* ---------- 使用说明弹窗（卡片同款视觉） ---------- */
+.help-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+}
+.help-card {
+  position: absolute;
+  display: block;
+  width: 580px;
+  max-width: calc(100vw - 32px);
+  padding: 7px;
+  border-radius: 16px;
+  cursor: default;
+  box-shadow: var(--shadow-card-hover);
+  animation: helpIn 0.42s cubic-bezier(0.3, 1.25, 0.45, 1) both;
+}
+.help-card:hover,
+.help-card:active {
+  transform: none; /* 覆盖 .card 的悬停放大 */
+}
+@keyframes helpIn {
+  from {
+    opacity: 0;
+  }
+}
+/* 关闭按钮：常显（不依赖卡片 hover） */
+.help-card .card-x {
+  transform: scale(1);
+  top: 12px;
+  right: 12px;
+  width: 26px;
+  height: 26px;
+  padding: 7px;
+}
+.help-inner {
+  border-radius: 11px;
+  background: linear-gradient(165deg, #fdfdfe 55%, #f1f3fa 100%);
+  overflow: hidden;
+}
+.help-head {
+  padding: 16px 52px 12px 20px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.18);
+  cursor: grab;
+}
+.help-head:active {
+  cursor: grabbing;
+}
+.help-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #222;
+}
+.help-sub {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: #888;
+}
+/* 两列布局：中间竖向分割线 */
+.help-cols {
+  display: flex;
+  align-items: stretch;
+}
+.help-col {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 12px 10px;
+}
+.help-col + .help-col {
+  border-left: 1px solid rgba(127, 127, 127, 0.22);
+}
+.help-sec h3 {
+  margin: 11px 0 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #5682f5;
+}
+.help-row {
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+.help-row:nth-child(even) {
+  background: rgba(127, 127, 127, 0.07);
+}
+.help-k {
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+  line-height: 1.4;
+}
+.help-v {
+  font-size: 12px;
+  color: #666;
+  line-height: 1.4;
+  margin-top: 1px;
+}
+@media (prefers-color-scheme: dark) {
+  .help-inner {
+    background: linear-gradient(165deg, #2b2b30 55%, #232327 100%);
+  }
+  .help-title {
+    color: #f0f0f0;
+  }
+  .help-sub {
+    color: #9a9aa2;
+  }
+  .help-col + .help-col {
+    border-left-color: rgba(127, 127, 127, 0.3);
+  }
+  .help-row:nth-child(even) {
+    background: rgba(127, 127, 127, 0.12);
+  }
+  .help-k {
+    color: #e2e2e6;
+  }
+  .help-v {
+    color: #a6a6ae;
+  }
+}
