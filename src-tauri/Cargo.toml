@@ -1,12 +1,12 @@
 [package]
-name = "tendedero-win"
+name = "file-line"
 version = "0.1.0"
 description = "晾衣绳 — 屏幕顶部的晾衣绳挂件（Windows）"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "tendedero_win_lib"
+name = "file_line_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

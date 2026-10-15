@@ -1025,6 +1025,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "file-line"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "image",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-drag",
+ "windows 0.61.3",
+ "windows-core 0.61.2",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4133,23 +4150,6 @@ dependencies = [
  "dunce",
  "embed-resource",
  "toml 1.1.8+spec-1.1.0",
-]
-
-[[package]]
-name = "tendedero-win"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "image",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-drag",
- "windows 0.61.3",
- "windows-core 0.61.2",
 ]
 
 [[package]]

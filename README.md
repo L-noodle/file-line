@@ -51,7 +51,7 @@ npm run tauri build
 | 产物 | 路径 |
 | --- | --- |
 | NSIS 安装包 | `src-tauri\target\release\bundle\nsis\晾衣绳_0.1.0_x64-setup.exe` |
-| 绿色单文件 exe | `src-tauri\target\release\tendedero-win.exe` |
+| 绿色单文件 exe | `src-tauri\target\release\file-line.exe` |
 
 - **安装包**：双击安装，含开始菜单 / 卸载入口；版本号随 `tauri.conf.json` 与 `Cargo.toml` 中的 `version` 变化
 - **绿色版**：单个 exe，拷走即用，无需安装

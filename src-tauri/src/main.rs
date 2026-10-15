@@ -2,5 +2,5 @@
 #![windows_subsystem = "windows"]
 
 fn main() {
-    tendedero_win_lib::run()
+    file_line_lib::run()
 }
