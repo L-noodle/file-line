@@ -13,13 +13,14 @@ import type { Item } from "./types";
 import { api } from "./api";
 import {
   cardWidth,
+  dockScale,
+  DOCK_RANGE,
   panelHeight,
   photoMaxHeight,
   PIN_ABOVE,
-  REVEAL_BASE,
-  REVEAL_DUR,
-  revealStagger,
+  ROPE_TOP,
   ropeY,
+  sag,
   SizeKey,
   spacing,
   visibleCapacity,
@@ -36,7 +37,7 @@ type HelpRect = { x: number; y: number; w: number; h: number };
 
 export default function App() {
   const [items, setItems] = useState<Item[]>([]);
-  const [size, setSize] = useState<SizeKey>("medium");
+  const [size, setSize] = useState<SizeKey>("small");
   const [revealed, setRevealed] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [helpOpen, setHelpOpen] = useState(false); // 使用说明弹窗（托盘菜单触发）
@@ -44,7 +45,15 @@ export default function App() {
   const [width, setWidth] = useState(window.innerWidth);
   const [dragHover, setDragHover] = useState(false); // 外部拖拽悬停在可放置区（绳子彩色流动反馈）
   const [scrollPx, setScrollPx] = useState(0); // 滚轮回看偏移 px（0 = 最新卡片靠右）
+  const [reorder, setReorder] = useState<{ id: string; mx: number } | null>(null); // 夹子拖拽重排：被拖卡片 id + 鼠标 x
+  const reorderRef = useRef<{ id: string; mx: number } | null>(null);
+  reorderRef.current = reorder;
   const wheelAccRef = useRef(0); // 滚轮累积量（触控板小步事件合并防抖）
+  // ---------- Dock 放大联动（Rust 钩子转发条带内鼠标位置） ----------
+  const panelRef = useRef<HTMLDivElement>(null);
+  const mouseRef = useRef<number | null>(null); // 条带内鼠标逻辑 x（null = 离开，全部缩回）
+  const slotsRef = useRef<{ el: HTMLElement; x: number }[]>([]); // 可见卡片 DOM + 中心 x
+  const zoneBottomRef = useRef(0); // 卡片感应区底部 y（低于此不触发放大）
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef(0);
   const menuRef = useRef<MenuState | null>(null);
@@ -458,9 +467,11 @@ export default function App() {
   const shiftPx = (startFloat - start) * sp;
   const visibleItems = items
     .slice(start, start + visCount)
-    .map((it, i) => ({ item: it, i }));
-  const folded = items.slice(0, start);
+    .map((it, i) => ({ item: it, i }));  const folded = items.slice(0, start);
   const foldedRight = items.slice(start + visCount);
+  // 夹子拖拽重排用的最新布局参数（window 监听 handler 通过 ref 读取）
+  const reorderLayoutRef = useRef({ sp, start, visCount, width, shiftPx });
+  reorderLayoutRef.current = { sp, start, visCount, width, shiftPx };
   const halfSpan = ((visCount - 1) / 2) * spacing(size);
   // 左右折叠堆叠与可见区对称摆放（各留一格间距），
   // 并 clamp 到距屏幕边界 ≥ 20px（窄屏 / 半屏时不再贴边出屏）
@@ -506,21 +517,67 @@ export default function App() {
 
   const onWheel = (e: React.WheelEvent) => applyWheel(e.deltaY, e.deltaX);
 
+  // ---------- 夹子拖拽重排（沿绳左右换位） ----------
+  const startReorder = useCallback((e: React.PointerEvent, item: Item) => {
+    setReorder({ id: item.id, mx: e.clientX });
+    window.dispatchEvent(new CustomEvent("card-drag-start"));
+  }, []);
+
+  const endReorder = useCallback(() => {
+    if (!reorderRef.current) return;
+    setReorder(null);
+    window.dispatchEvent(new CustomEvent("card-drag-end"));
+  }, []);
+
+  const moveReorder = useCallback((mx: number) => {
+    const ro = reorderRef.current;
+    if (!ro) return;
+    const L = reorderLayoutRef.current;
+    const count = Math.min(itemsRef.current.length, L.visCount);
+    if (count > 0) {
+      // 由鼠标 x 反解悬停的可见槽位，实时把被拖卡片移到该位置（其余卡片 CSS 过渡腾位）
+      const hoverI = Math.round(
+        (mx - L.width / 2 + L.shiftPx) / L.sp + (count - 1) / 2,
+      );
+      const clamped = Math.max(0, Math.min(count - 1, hoverI));
+      const target = L.start + clamped;
+      setItems((prev) => {
+        const idx = prev.findIndex((it) => it.id === ro.id);
+        if (idx < 0 || target === idx || target >= prev.length) return prev;
+        const next = prev.slice();
+        const [moved] = next.splice(idx, 1);
+        next.splice(target, 0, moved);
+        return next;
+      });
+    }
+    setReorder((prev) =>
+      prev && prev.mx !== mx ? { ...prev, mx } : prev,
+    );
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (!reorderRef.current) return;
+      // 条带外松开左键收不到 pointerup：以 buttons 位兜底结束
+      if ((e.buttons & 1) === 0) {
+        endReorder();
+        return;
+      }
+      moveReorder(e.clientX);
+    };
+    const onUp = () => endReorder();
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [moveReorder, endReorder]);
+
   // ---------- 命中区上报 ----------
   useEffect(() => {
-    if (helpRect) {
-      // 弹窗打开：窗口已全屏化，只报弹窗矩形（留 16px hover 余量），
-      // 其余区域穿透；panel_h=0 关闭"按住左键拖入"兜底与滚轮拦截，
-      // 避免全屏窗口截获其他拖拽/滚动
-      api
-        .setHitRects(
-          [[helpRect.x - 16, helpRect.y - 16, helpRect.w + 32, helpRect.h + 32]],
-          0,
-          false,
-        )
-        .catch(console.error);
-      return;
-    }
     const cw = cardWidth(size);
     const ph = photoMaxHeight(size);
     const rects: [number, number, number, number][] = [];
@@ -545,11 +602,63 @@ export default function App() {
         rects.push([cx - 55, py - 4, 110, 100]);
       }
     }
+    if (helpRect) {
+      // 弹窗打开：窗口已全屏化（逻辑坐标=屏幕坐标），弹窗矩形（留 16px
+      // hover 余量）与卡片命中区合并上报，阅读说明期间卡片仍可点击 /
+      // 悬停放大 / 滚轮回看 / 拖入挂绳，其余区域照常穿透
+      rects.unshift([
+        helpRect.x - 16,
+        helpRect.y - 16,
+        helpRect.w + 32,
+        helpRect.h + 32,
+      ]);
+    }
     api.setHitRects(rects, panelH, maxScroll > 0).catch(console.error);
   }, [items, width, size, revealed, menu, scrollPx, helpRect]);
 
+  // ---------- Dock 放大联动（macOS Dock 风格） ----------
+  // Rust 鼠标钩子转发条带内光标位置（卡片间隙穿透，WebView 自身收不到 move），
+  // 按每张卡片中心与鼠标 x 的距离算放大倍数，直接写 CSS 变量驱动，不走 React 渲染
+  const applyDock = useCallback(() => {
+    const mx = mouseRef.current;
+    const sp = spacing(size);
+    const range = DOCK_RANGE * sp;
+    for (const s of slotsRef.current) {
+      const d = mx == null ? Infinity : Math.abs(s.x - mx);
+      // 超出影响范围清除变量（回落到 CSS 默认值 1，transition 平滑缩回）
+      if (d >= range) s.el.style.removeProperty("--dock");
+      else s.el.style.setProperty("--dock", dockScale(d, sp).toFixed(4));
+    }
+  }, [size]);
+
+  // 布局变化（增删卡片 / 滚轮回看 / 尺寸档位 / 显示隐藏）后重建卡片索引
+  useEffect(() => {
+    if (!revealed) mouseRef.current = null; // 面板隐藏时清状态，下次唤出从原始大小开始
+    // 感应区底部：卡片区（含衣夹）下沿 + 14px 余量；低于此不触发（条带下半空白区）
+    zoneBottomRef.current =
+      ROPE_TOP + sag(width) - PIN_ABOVE + 26 + photoMaxHeight(size) + 14;
+    const panel = panelRef.current;
+    if (!panel) return;
+    slotsRef.current = Array.from(
+      panel.querySelectorAll<HTMLElement>(".pegged-slot"),
+    ).map((el) => ({ el, x: parseFloat(el.dataset.x || "0") }));
+    applyDock();
+  }, [items, width, size, scrollPx, revealed, applyDock]);
+
+  useEffect(() => {
+    const un = listen<[number, number] | null>("panel-mouse", (e) => {
+      const p = e.payload;
+      mouseRef.current = p && p[1] <= zoneBottomRef.current ? p[0] : null;
+      applyDock();
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, [applyDock]);
+
   return (
     <div
+      ref={panelRef}
       className={"panel" + (revealed ? "" : " hidden")}
       style={{ height: panelH }}
       onWheel={onWheel}
@@ -570,35 +679,37 @@ export default function App() {
           />
         </div>
       )}
-      {/* 入场时序：左堆叠先于首卡浮现，右堆叠等所有卡片浮现完最后出现 */}
-      <OverflowFan
-        items={folded}
-        x={fanX}
-        size={size}
-        revealDelay={REVEAL_BASE - 40}
-      />
-      <OverflowFan
-        items={foldedRight}
-        x={fanXRight}
-        size={size}
-        revealDelay={
-          REVEAL_BASE + revealStagger(visCount - 1, visCount) + REVEAL_DUR
-        }
-      />
-      {visibleItems.map(({ item, i }) => (
-        <PeggedCard
-          key={item.id}
-          item={item}
-          index={i}
-          count={visCount}
-          width={width}
-          size={size}
-          x={visibleX(i, visCount, width, size) - shiftPx}
-          onContextMenu={openCardMenu}
-          onRemove={(id) => removeItems([id])}
-          falling={fallingIds.includes(item.id)}
-        />
-      ))}
+      <OverflowFan items={folded} x={fanX} size={size} />
+      <OverflowFan items={foldedRight} x={fanXRight} size={size} />
+      {visibleItems.map(({ item, i }) => {
+        const isReorder = item.id === reorder?.id;
+        const slotX = visibleX(i, visCount, width, size) - shiftPx;
+        // 被拖卡片直接跟随鼠标（钳制在首末槽位之间，其余卡片已实时重排腾位）
+        const x =
+          isReorder && reorder
+            ? Math.max(
+                visibleX(0, visCount, width, size) - shiftPx,
+                Math.min(
+                  visibleX(visCount - 1, visCount, width, size) - shiftPx,
+                  reorder.mx,
+                ),
+              )
+            : slotX;
+        return (
+          <PeggedCard
+            key={item.id}
+            item={item}
+            width={width}
+            size={size}
+            x={x}
+            reorder={isReorder}
+            onPinDown={startReorder}
+            onContextMenu={openCardMenu}
+            onRemove={(id) => removeItems([id])}
+            falling={fallingIds.includes(item.id)}
+          />
+        );
+      })}
       <ContextMenu menu={menu} onClose={() => setMenu(null)} />
       {helpOpen && (
         <HelpDialog

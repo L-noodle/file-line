@@ -82,15 +82,18 @@ export default function HelpDialog({
   onDragEnd: () => void;
   onClose: () => void;
 }) {
-  // 弹窗位置：初始居中偏上，拖动标题栏移动（clamp 在全屏窗口内）
+  // 弹窗位置：屏幕居中（挂载时窗口可能尚未完成全屏化，先按屏幕尺寸估算，
+  // resize 后精算），拖动标题栏移动（clamp 在全屏窗口内）
   const [pos, setPos] = useState(() => ({
     x: Math.max(8, Math.round((window.innerWidth - CARD_W) / 2)),
-    y: 22,
+    y: Math.max(4, Math.round((window.screen.height - 600) / 2)), // 高度先估算，量到实际值后校正
   }));
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const movedRef = useRef(false); // 用户拖动过后不再自动居中
 
-  // 挂载时上报初始矩形（窗口已全屏化，弹窗即点即用）
+  // 位置变化后上报矩形（挂载 / 居中校正），驱动 Rust 端点击命中区
   useEffect(() => {
+    if (dragRef.current) return; // 拖动中不上报，结束时统一上报
     const card = document.getElementById("help-card");
     if (card) {
       const r = card.getBoundingClientRect();
@@ -102,6 +105,26 @@ export default function HelpDialog({
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pos]);
+
+  // 屏幕居中：挂载时窗口可能还是顶部条带（全屏化是异步的），先用 screen 尺寸
+  // 加实际卡片高度校正；窗口 resize（全屏化完成）后按窗口尺寸精算
+  useEffect(() => {
+    const center = (useScreen: boolean) => {
+      if (movedRef.current) return;
+      const card = document.getElementById("help-card");
+      const h = card?.offsetHeight ?? 0;
+      if (!h) return;
+      const viewH = useScreen ? window.screen.height : window.innerHeight;
+      setPos({
+        x: Math.max(8, Math.round((window.innerWidth - CARD_W) / 2)),
+        y: Math.max(4, Math.round((viewH - h) / 2)),
+      });
+    };
+    center(true);
+    const onResize = () => center(false);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   // Esc / 点击弹窗外部关闭
@@ -110,8 +133,12 @@ export default function HelpDialog({
       if (e.key === "Escape") onClose();
     };
     const onDown = (e: MouseEvent) => {
-      const card = document.getElementById("help-card");
-      if (card && !card.contains(e.target as Node)) onClose();
+      // 弹窗与晾衣绳面板（卡片 / 菜单等）内的点击不关闭——阅读说明期间
+      // 卡片交互保持可用；穿透区域的点击到不了 WebView，能走到这里的
+      // 只有强制捕获期间点到的窗口空白
+      const t = e.target;
+      if (t instanceof Element && t.closest(".panel")) return;
+      onClose();
     };
     // 延迟挂载，避免吞掉触发本次弹窗的事件
     const t = window.setTimeout(() => {
@@ -132,6 +159,7 @@ export default function HelpDialog({
     if (!card) return;
     const r = card.getBoundingClientRect();
     dragRef.current = { sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top };
+    movedRef.current = true; // 用户自己定位后，resize 不再重置位置
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     onDragStart();
   };

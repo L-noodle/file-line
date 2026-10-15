@@ -25,7 +25,7 @@ impl SizeKey {
         match s {
             "small" => SizeKey::Small,
             "large" => SizeKey::Large,
-            _ => SizeKey::Medium,
+            _ => SizeKey::Small,
         }
     }
     pub fn as_str(&self) -> &'static str {
@@ -347,7 +347,7 @@ pub fn run() {
             None,
         ))
         .manage(AppState {
-            size: Mutex::new(SizeKey::Medium),
+            size: Mutex::new(SizeKey::Small),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -415,15 +415,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
     // --- 菜单项 ---
     let autostart = CheckMenuItem::with_id(app, "autostart", "开机启动", true, auto_on, None::<&str>)?;
-    let small = CheckMenuItem::with_id(app, "size-small", "小", true, *cur_size == SizeKey::Small, None::<&str>)?;
-    let medium = CheckMenuItem::with_id(app, "size-medium", "中（默认）", true, *cur_size == SizeKey::Medium, None::<&str>)?;
+    let small = CheckMenuItem::with_id(app, "size-small", "小（默认）", true, *cur_size == SizeKey::Small, None::<&str>)?;
+    let medium = CheckMenuItem::with_id(app, "size-medium", "中", true, *cur_size == SizeKey::Medium, None::<&str>)?;
     let large = CheckMenuItem::with_id(app, "size-large", "大", true, *cur_size == SizeKey::Large, None::<&str>)?;
     let help = MenuItem::with_id(app, "help", "使用说明", true, None::<&str>)?;
     let sep = tauri::menu::PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
     let size_menu = Submenu::with_items(app, "卡片大小", true, &[&small, &medium, &large])?;
-    let menu = Menu::with_items(app, &[&autostart, &sep, &size_menu, &help, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&help, &sep, &size_menu, &autostart, &sep, &quit])?;
     drop(cur_size);
     drop(app_state);
 

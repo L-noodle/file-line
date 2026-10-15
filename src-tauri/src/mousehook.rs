@@ -47,8 +47,13 @@ enum Msg {
     Hover(bool),
     /// 条带区域内滚轮（dx/dy：与前端 WheelEvent 增量同向）
     Wheel { dx: i32, dy: i32 },
+    /// 条带区域内鼠标逻辑坐标（Dock 放大联动；None = 离开条带）
+    Mouse { pos: Option<(f64, f64)> },
 }
 static TX: OnceLock<Sender<Msg>> = OnceLock::new();
+
+/// 上次转发给前端的条带内鼠标位置（节流：移动 ≥1 逻辑像素或进出条带才发）
+static LAST_MOUSE: Mutex<Option<(f64, f64)>> = Mutex::new(None);
 
 /// 绳子隐藏时重置全部顶部触发状态，保证下次悬停/拖拽能重新触发。
 pub fn reset_triggers() {
@@ -153,6 +158,10 @@ pub fn start(app: AppHandle) {
                     Msg::Wheel { dx, dy } => {
                         // 条带区域内的滚轮穿透捕获：转发给前端滚动卡片
                         let _ = app.emit("panel-wheel", (dx, dy));
+                    }
+                    Msg::Mouse { pos } => {
+                        // 条带内鼠标位置：前端据此做 Dock 式邻近放大联动
+                        let _ = app.emit("panel-mouse", pos);
                     }
                 }
             }
@@ -328,13 +337,13 @@ unsafe extern "system" fn hook_proc(
             let (px, py) = (info.pt.x as f64, info.pt.y as f64);
             let over = OVERRIDE.load(Ordering::SeqCst);
             let guard = REGIONS.lock().unwrap();
-            let (capture, in_win) = if let Some(r) = guard.as_ref() {
+            let (capture, in_win, lx, ly) = if let Some(r) = guard.as_ref() {
                 let (lx, ly) = (px / r.scale, py / r.scale);
                 let hit = r.rects.iter().any(|rc| in_rect(lx, ly, rc));
                 let in_win = ly >= 0.0 && ly <= r.panel_h && lx >= 0.0 && lx <= r.win_w;
-                (hit, in_win)
+                (hit, in_win, lx, ly)
             } else {
-                (false, false)
+                (false, false, 0.0, 0.0)
             };
             drop(guard);
 
@@ -351,6 +360,33 @@ unsafe extern "system" fn hook_proc(
                 PANEL_HOVER.store(in_win, Ordering::SeqCst);
                 if let Some(tx) = TX.get() {
                     let _ = tx.send(Msg::Hover(in_win));
+                }
+            }
+
+            // Dock 放大联动：面板显示时光标在条带内 → 转发逻辑坐标；
+            // 离开条带 → None（前端把全部卡片缩回）。节流避免 IPC 洪泛。
+            let mouse_pos = if REVEALED.load(Ordering::SeqCst) && in_win {
+                Some((lx, ly))
+            } else {
+                None
+            };
+            let mouse_changed = {
+                let mut last = LAST_MOUSE.lock().unwrap();
+                let changed = match (*last, mouse_pos) {
+                    (None, None) => false,
+                    (Some((x0, y0)), Some((x1, y1))) => {
+                        (x1 - x0).abs() >= 1.0 || (y1 - y0).abs() >= 1.0
+                    }
+                    _ => true, // 进出条带的沿变化必发
+                };
+                if changed {
+                    *last = mouse_pos;
+                }
+                changed
+            };
+            if mouse_changed {
+                if let Some(tx) = TX.get() {
+                    let _ = tx.send(Msg::Mouse { pos: mouse_pos });
                 }
             }
         }

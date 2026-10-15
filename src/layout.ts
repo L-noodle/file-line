@@ -6,18 +6,9 @@ export type SizeKey = "small" | "medium" | "large";
 export const ROPE_TOP = 10;
 export const PIN_ABOVE = 9.5; // 衣夹顶相对绳的偏移
 
-// rope-reveal 入场时序：卡片从左到右"由快转慢"地浮现——
-// 左侧卡片挨得紧、出现节奏快，越往右间隔越大、节奏放缓（pow 1.5 分布）。
-// 左右折叠堆叠复用同一时间轴（左堆叠最先、右堆叠最后）。
-export const REVEAL_BASE = 200; // 首张卡片延迟（等面板滑入尾段）
-export const REVEAL_SPAN = 340; // 全部卡片错峰的总时长（count ≥ 2）
-export const REVEAL_DUR = 220; // 单张浮现动画时长
-
-/** 第 index 张卡片的错峰延迟：前密后疏，由快转慢。 */
-export function revealStagger(index: number, count: number): number {
-  if (count <= 1) return 0;
-  return Math.pow(index / (count - 1), 1.5) * REVEAL_SPAN;
-}
+// rope-reveal 入场时序：卡片与折叠堆叠不播单独浮现动画，
+// 跟随面板（含绳）一起滑入落下，保持同一节奏。
+export const REVEAL_BASE = 200; // 面板滑入尾段：卡片接近到位，开始挂绳晃动
 
 export function scaleOf(size: SizeKey): number {
   return size === "small" ? 0.6 : size === "large" ? 1.0 : 0.8;
@@ -64,4 +55,19 @@ export function visibleX(
 ): number {
   const s = spacing(size);
   return width / 2 + (index - (count - 1) / 2) * s;
+}
+
+// ---------- Dock 式邻近放大（macOS Dock 风格） ----------
+// 以鼠标 x 为中心，高斯衰减：距离 0 → 最大放大，邻居快速回落，远处不受影响。
+// SIGMA 越小衰减越陡（邻居放大越少）；RANGE 为截断半径。
+export const DOCK_MAX = 1.2; // 正下方卡片的最大放大倍数
+export const DOCK_RANGE = 2.5; // 影响半径（间距倍数）
+export const DOCK_SIGMA = 0.85; // 高斯衰减宽度（间距倍数）
+
+export function dockScale(dist: number, spacingPx: number): number {
+  const range = DOCK_RANGE * spacingPx;
+  if (dist >= range) return 1;
+  const sigma = DOCK_SIGMA * spacingPx;
+  const f = Math.exp(-((dist / sigma) * (dist / sigma)));
+  return 1 + (DOCK_MAX - 1) * f;
 }
