@@ -1,118 +1,123 @@
 <p align="center">
-  <img src="public/readme/icon.png" width="128" alt="fileLine 图标" />
+  <img src="public/readme/icon.png" width="128" alt="fileLine icon" />
 </p>
 
-<h1 align="center">file-line（文件晾衣绳）</h1>
+<h1 align="center">file-line (Clothesline for Files)</h1>
 
-<p align="center">贴于屏幕顶端的透明虚拟晾衣绳：截图、文件、文件夹即拖即挂，单击复制、双击打开、拖出秒分享</p>
+<p align="center">A transparent virtual clothesline pinned to the top of your screen. Drag, drop, and "hang" screenshots, files, and folders. Click to copy, double-click to open, drag out to share.</p>
+
+<p align="center">
+  <a href="README.md">English</a> · <a href="docs/README.zh.md">中文</a>
+</p>
+
+<img src="public/readme/desktop-demo.png" width="100%"/>
+
+### Demo Video
 
 <video src="public/readme/file-line使用视频.mp4" controls width="720"></video>
 
-> 若平台不支持内嵌播放，可直接观看视频文件：[public/readme/file-line使用视频.mp4](public/readme/file-line使用视频.mp4)
+> If your platform can't play the embedded video, watch the file directly: [public/readme/file-line使用视频.mp4](public/readme/file-line使用视频.mp4)
 
-## 功能特性
+## Features
 
-- **拖入即挂**：把文件、文件夹直接拖到绳子上，变成一张张卡片晾起来
-- **截图自动晾**：截图后自动挂到绳子上
-- **卡片交互**：
-  - 单击：复制（图片进剪贴板，文件进文件列表）
-  - 双击：用默认程序打开
-  - 按住拖出：拖到聊天窗口、桌面等任意地方
-  - 右键菜单：打开 / 打开所在文件夹 / 取下 / 取下左侧全部 / 取下右侧全部 / 另存为 / 清空绳子
-- **托盘**：双击托盘图标显示 / 隐藏绳子；右键托盘菜单可设置开机启动、切换卡片大小（小 / 中 / 大）、退出
-- **自动隐藏**：闲置后滑出屏幕收起，鼠标放到屏幕顶部重新出现；拖拽着文件靠近顶部时立即弹出
-- **状态持久化**：卡片清单自动保存，重启应用后原样恢复
+- **Drag to hang**: Drag files or folders directly onto the line and watch them turn into cards pinned up.
+- **Auto-hang screenshots**: Screenshots are automatically pinned to the line.
+- **Card interactions**:
+  - **Click**: Copy (images go to the clipboard, files go to the file list)
+  - **Double-click**: Open with the default application
+  - **Hold and drag out**: Drop into chat windows, the desktop, or anywhere else
+  - **Right-click menu**: Open / Open containing folder / Remove / Remove all to the left / Remove all to the right / Save as / Clear the line
+- **Tray**: Double-click the tray icon to show/hide the line. Right-click the tray menu to enable auto-start, switch card size (Small / Medium / Large), or quit.
+- **Auto-hide**: Slides off-screen when idle and reappears when you hover near the top of the screen. It also pops out instantly when you're dragging files toward the top.
+- **Persistent state**: The card list is saved automatically and restored exactly as it was when you relaunch the app.
 
-## 环境要求
+## Requirements
 
-- Windows 10 / 11（需 WebView2 运行时，Win11 与较新的 Win10 已内置）
-- [Node.js](https://nodejs.org/) 18+（推荐 20 LTS）
-- [Rust](https://www.rust-lang.org/tools/install) stable（建议 1.78+，安装 MSVC toolchain 目标）
-- 磁盘留出约 3 GB 给 Rust 编译缓存（`src-tauri/target`）
+- Windows 10 / 11 (requires the WebView2 Runtime; it's preinstalled on Win11 and recent Win10)
+- [Node.js](https://nodejs.org/) 18+ (20 LTS recommended)
+- [Rust](https://www.rust-lang.org/tools/install) stable (1.78+ recommended, with the MSVC toolchain target)
+- About 3 GB of free disk space for the Rust compilation cache (`src-tauri/target`)
 
-## 开发启动
+## Development
 
 ```bash
-# 1. 安装依赖
+# 1. Install dependencies
 npm install
 
-# 2. 以开发模式启动（首次会编译 Rust，约几分钟）
+# 2. Start in dev mode (the first run compiles Rust, which takes a few minutes)
 npm run tauri dev
 ```
 
-- 修改 `src/` 下的前端代码：Vite 热更新，即时生效
-- 修改 `src-tauri/` 下的 Rust 代码：自动重新编译并重启应用
+- Edit frontend code under `src/`: Vite hot reload — changes take effect immediately.
+- Edit Rust code under `src-tauri/`: The app automatically recompiles and restarts.
 
-> Rust 拉取依赖慢时，可先设置镜像：
-> `set CARGO_HTTP_MULTIPLEXING=false`，或参考 [RsProxy](https://rsproxy.cn/) 配置。
+> If pulling rust dependencies is slow, try setting `CARGO_HTTP_MULTIPLEXING=false`, or see [RsProxy](https://rsproxy.cn/) for mirror configuration.
 
-## 打包发布
+## Building for Release
 
 ```bash
 npm run tauri build
 ```
 
-构建完成后产物在：
+After the build completes, the artifacts are located at:
 
-| 产物 | 路径 |
+| Artifact | Path |
 | --- | --- |
-| NSIS 安装包 | `src-tauri\target\release\bundle\nsis\晾衣绳_0.1.0_x64-setup.exe` |
-| 绿色单文件 exe | `src-tauri\target\release\file-line.exe` |
+| NSIS installer | `src-tauri\target\release\bundle\nsis\晾衣绳_0.1.0_x64-setup.exe` |
+| Portable single exe | `src-tauri\target\release\file-line.exe` |
 
-- **安装包**：双击安装，含开始菜单 / 卸载入口；版本号随 `tauri.conf.json` 与 `Cargo.toml` 中的 `version` 变化
-- **绿色版**：单个 exe，拷走即用，无需安装
+- **Installer**: Double-click to install; includes Start Menu and uninstaller entries. The version number follows the `version` field in `tauri.conf.json` and `Cargo.toml`.
+- **Portable**: A single exe — copy it anywhere and use it without installation.
 
-## 基本使用
+## Basic Usage
 
-### 唤出 / 收起
+### Show / Hide
 
-| 操作 | 说明 |
+| Action | Description |
 | --- | --- |
-| 双击托盘图标 | 显示或收起晾衣绳 |
-| 鼠标贴到屏幕顶部 | 稍作停留即唤出 |
-| 截图或复制文件 | 绳子自动出现，文件挂上新卡片 |
-| 空闲约 2 秒 | 自动滑回收起，内容不会丢失 |
+| Double-click the tray icon | Show or hide the clothesline |
+| Hover the mouse near the top of the screen | The line appears after a brief pause |
+| Take a screenshot or copy a file | The line appears automatically and the new file is hung up |
+| Idle for about 2 seconds | The line slides back to hide; your content is preserved |
 
-### 挂上卡片
+### Hanging Up Cards
 
-| 操作 | 说明 |
+| Action | Description |
 | --- | --- |
-| 拖文件 / 文件夹到屏幕顶部 | 松手即挂上绳子 |
-| 复制到剪贴板的图片和文件 | 自动晾成新卡片 |
+| Drag files/folders to the top of the screen | Release to hang them on the line |
+| Copy images or files to the clipboard | They are automatically pinned as new cards |
 
-### 托盘菜单（右键托盘图标）
+### Tray Menu (right-click the tray icon)
 
-| 操作 | 说明 |
+| Action | Description |
 | --- | --- |
-| 开机启动 | 随系统自动运行 |
-| 卡片大小 | 切换 小 / 中 / 大 三档显示 |
+| Auto-start on boot | Launch with the system automatically |
+| Card size | Switch between Small / Medium / Large |
 
-### 卡片操作
+### Card Operations
 
-| 操作 | 说明 |
+| Action | Description |
 | --- | --- |
-| 单击卡片 | 复制该文件到剪贴板 |
-| 双击卡片 | 用默认程序打开 |
-| 拖动卡片上的衣夹 | 沿绳子左右移动，调整卡片顺序 |
-| 按住卡片向外拖 | 作为文件拖进聊天窗口、编辑器 |
-| 右键卡片 | 打开、定位、取下、全部另存为等 |
-| 悬停卡片右上角 × | 取下这张卡片 |
+| Click a card | Copy that file to the clipboard |
+| Double-click a card | Open with the default program |
+| Drag the clothespin on a card | Slide it left or right along the line to reorder |
+| Hold and drag a card outward | Drop it into a chat window or editor as a file |
+| Right-click a card | Open, locate, remove, save all as, etc. |
+| Hover the × at the top-right of a card | Remove that card |
 
-### 回看历史
+### Browsing History
 
-| 操作 | 说明 |
+| Action | Description |
 | --- | --- |
-| 在绳子上滚动滚轮 | 左右滑动回看更早的卡片 |
-| 点击两端的折叠堆叠 | 展开列表，直接跳到某张卡片 |
+| Scroll the wheel on the line | Slide left/right to see earlier cards |
+| Click the collapsed stacks at either end | Expand the list and jump to a specific card |
 
+## FAQ
 
-## 常见问题
+- **Tray/window icon not updating**: Explorer caches icons. Restart explorer or wait a moment.
+- **Screenshots don't appear on the line**: Confirm the app is running (the tray icon is visible). Some third-party screenshot tools don't write to the system clipboard listener — paste or drag in manually.
+- **Want auto-start on boot**: Right-click the tray icon → enable "Auto-start on boot".
 
-- **托盘 / 窗口图标没更新**：资源管理器对图标有缓存，重启资源管理器或稍等片刻
-- **截图没有自动挂上来**：确认应用正在运行（托盘有图标）；部分第三方截图工具不走系统剪贴板监听，需手动粘贴或拖入
-- **想要开机自启**：托盘图标右键 → 勾选「开机启动」
-
-## 技术栈
+## Tech Stack
 
 Tauri 2 + React 18 + TypeScript + Vite 6
-
