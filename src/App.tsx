@@ -199,20 +199,17 @@ export default function App() {
     });
     // macOS 未授权：提示开启精细点击穿透（点击/拖动微信等下方窗口不再被遮挡）
     const un9 = listen("mac-tap-denied", () => setMacDenied(true));
-    // 鼠标进入 / 离开面板区域（驱动闲置隐藏 + macOS 预激活）
+    // 鼠标进入 / 离开面板区域（驱动闲置隐藏）
     const un6 = listen<boolean>("panel-hover", (e) => {
       hoverRef.current = !!e.payload;
       if (hoverRef.current) {
         cancelHide();
-        // 预激活：macOS 原生拖拽会话（startDrag）硬性要求应用为前台/frontmost，
-        // 而悬浮穿透窗默认 focus:false、穿透态切换有 ~60ms 轮询延迟，若等
-        // pointerdown 才激活，首按的 pointer 序列常丢失、startDrag 起不来，
-        // 表现为「必须先点一下聚焦窗口才能拖动卡片」。
-        // 收到 panel-hover=true 时穿透已先一步切为非穿透（Capture 先于 Hover 入队），
-        // webview 能稳定收到鼠标事件；此刻提前激活，到用户按下时应用已是前台，
-        // 拖拽立即可起。仅在绳子已显示时（用户唤出准备交互），避免闲置态鼠标
-        // 掠过抢夺键盘焦点。激活为幂等操作，已前台时无副作用。
-        if (IS_MAC && revealedRef.current) api.activateApp().catch(() => {});
+        // 注意：这里不做 macOS 预激活。鼠标移入即激活会抢占正在使用的应用
+        // （打字/游戏时被夺走键盘焦点）。改为真正的交互时才激活：
+        // 点击（左/右键）→ panel 捕获阶段监听；滚动 → applyWheel；
+        // 拖入 → drag-drop enter。拖出卡片不手动激活——acceptFirstMouse
+        //（tauri.conf.json）让后台首击直达 WebView 并由系统激活，
+        // 拖拽会话本身不要求前台（同 Tendedero 的做法）。
       } else {
         // 原生钩子已确认光标（含按住左键的文件拖拽）离开条带窗口。
         // OLE（Windows）/ NSDragging（macOS）的拖放 leave 事件可能在条带
@@ -246,6 +243,8 @@ export default function App() {
         if (IS_MAC) {
           setDragHover(true);
           cancelHide();
+          // 拖入文件 = 真正的拖拽交互，此刻激活（不早于交互抢占前台）
+          api.activateApp().catch(() => {});
         }
       } else if (e.payload.type === "over") {
         if (!wiggleDone) {
@@ -559,6 +558,9 @@ export default function App() {
   // 卡片上滚动（WebView 原生 wheel）与条带空白区滚动（panel-wheel 转发）共用
   const applyWheel = useCallback(
     (dy: number, dx: number) => {
+      // 滚动是真实交互：macOS 此刻激活（-wheel 转发与 WebView 原生 wheel 都汇聚于此）。
+      // 放在 maxScroll 早退前：卡片上滚动但无内容可滚（钩子仍拦截转发）也抢占
+      if (IS_MAC && revealedRef.current) api.activateApp().catch(() => {});
       if (maxScroll <= 0) return;
       cancelHide();
       wheelAccRef.current += dy + dx;
@@ -735,6 +737,16 @@ export default function App() {
       className={"panel" + (revealed ? "" : " hidden")}
       style={{ height: panelH }}
       onWheel={onWheel}
+      // macOS 交互时激活：捕获阶段最先执行，覆盖 panel 内全部子元素——
+      // 左键（卡片单击/双击/拖出、夹子重排、关闭按钮、弹窗拖动）与
+      // 右键（contextmenu，含右键按下产生的 pointerdown button=2）。
+      // 仅在已唤出时激活，未唤出（闲置态）不抢前台焦点
+      onPointerDownCapture={() => {
+        if (IS_MAC && revealedRef.current) api.activateApp().catch(() => {});
+      }}
+      onContextMenuCapture={() => {
+        if (IS_MAC && revealedRef.current) api.activateApp().catch(() => {});
+      }}
     >
       <Rope width={width} active={dragHover} />
       {items.length === 0 && (

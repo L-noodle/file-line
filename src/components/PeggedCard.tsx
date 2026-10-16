@@ -7,12 +7,6 @@ import { api } from "../api";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import type { Item } from "../types";
 
-// 运行时平台判断：macOS 原生拖拽会话要求应用为前台，需在拖拽前激活；
-// Windows 的 OLE 拖放由系统驱动，无需激活。仅在 macOS 调用 activateApp，
-// 避免 Windows 上按下卡片触发 SetForegroundWindow 抢夺前台焦点。
-const IS_MAC =
-  typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent || "");
-
 interface Props {
   item: Item;
   width: number;
@@ -93,10 +87,9 @@ export default function PeggedCard({ item, width, size, x, onContextMenu, onRemo
     if (e.button !== 0) return;
     downPt.current = { x: e.clientX, y: e.clientY, t: performance.now(), path: item.path };
     dragStarted.current = false;
-    // 主动把应用激活到前台：macOS 上应用未激活时原生拖拽会话拉不起来，
-    // 会导致「首次 / 切到别的 App 再拖」失败。提前触发，等真正的拖拽开始时已激活。
-    // Windows 拖放无需激活，跳过（避免按下卡片时 SetForegroundWindow 抢前台）。
-    if (IS_MAC) api.activateApp().catch(() => {});
+    // 无需手动激活：窗口开启 acceptFirstMouse（tauri.conf.json），后台首击
+    // 直达 WebView 且由系统完成激活；拖拽会话（beginDraggingSession）
+    // 本身不要求应用前台（drag crate 源码无激活调用）。
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -115,16 +108,10 @@ export default function PeggedCard({ item, width, size, x, onContextMenu, onRemo
       setDragging(true);
       window.dispatchEvent(new CustomEvent("card-drag-start"));
       const icon = item.thumb?.icon;
-      // 以文件形式拖出（聊天窗口 / 编辑器）。先确保应用已激活（macOS 拖拽依赖），再发起。
-      // Windows 拖放无需激活，跳过。
+      // 以文件形式拖出（聊天窗口 / 编辑器）。系统标准拖拽会话
+      // （beginDraggingSession，同 Tendedero），不要求应用前台，
+      // 后台发起照常工作；放到聊天窗口后目标应用自行接管前台。
       void (async () => {
-        if (IS_MAC) {
-          try {
-            await api.activateApp();
-          } catch {
-            /* 忽略：激活失败也不阻塞拖拽尝试 */
-          }
-        }
         startDrag({
           item: [item.path],
           icon: icon ?? "",
