@@ -50,6 +50,17 @@ static HOVER_ACTIVE: AtomicBool = AtomicBool::new(false);
 static HOVER_SINCE: AtomicU64 = AtomicU64::new(0);
 static HOVER_SHOWN: AtomicBool = AtomicBool::new(false);
 
+/// 全局左键按下起点（Windows 物理像素 / macOS 逻辑点）。
+/// 鼠标钩子层面拿不到 OLE 拖拽 payload（那只有拖放目标窗口能收到），
+/// 只能用启发式排除非文件场景：
+/// - 点击浏览器 tab/标题栏：起点就在顶部触发区内、几乎无位移 → 排除；
+/// - 拖动窗口：前台进入移动循环（fg_in_move_size）→ 排除；
+/// - 拖动浏览器 tab：不进系统移动循环，但起点在标签栏（顶部）→ 被起点排除覆盖；
+/// - 真正拖文件：从条带外部拖入、有明显位移 → 放行。
+static DRAG_ORIGIN: Mutex<Option<(f64, f64)>> = Mutex::new(None);
+/// 按下起点到当前光标的最小位移（像素），低于它视为点击而非拖拽
+const DRAG_MOVE_PX: f64 = 20.0;
+
 enum Msg {
     Capture(bool),
     Hover(bool),
@@ -215,26 +226,51 @@ fn start_windows(app: AppHandle) {
                 // 拖动窗口（前台线程处于移动/缩放循环）不算拖入文件，晾衣绳不出现
                 let left_down = lbutton && !fg_in_move_size();
 
-                let (in_win, hover_zone, edge_zone) = {
+                // 按下起点跟踪：钩子侧事件级记录为主，此处沿检测兜底
+                // （钩子缺失或漏事件时最多滞后一个采样周期，不影响判定）
+                {
+                    let mut origin = DRAG_ORIGIN.lock().unwrap();
+                    if lbutton {
+                        if origin.is_none() {
+                            *origin = Some((px, py));
+                        }
+                    } else {
+                        *origin = None;
+                    }
+                }
+
+                let (in_win, hover_zone, edge_zone, drag_entered) = {
                     let guard = REGIONS.lock().unwrap();
                     guard
                         .as_ref()
                         .map(|r| {
                             let (lx, ly) = (px / r.scale, py / r.scale);
                             let in_win = ly >= 0.0 && ly <= r.panel_h && lx >= 0.0 && lx <= r.win_w;
-                            // 悬停触发区：主屏最顶端 2 物理像素内（停留 1s 唤出）；
-                            // 拖拽触发区：顶部 5 逻辑像素内，拖入即唤出
+                            // 悬停触发区：主屏最顶端 2 物理像素内（停留 1s 唤出）
                             let hover_zone = px >= 0.0 && py >= 0.0 && py <= 2.0 && px <= r.win_w * r.scale;
+                            // 拖拽触发区：顶部 50 逻辑像素内，拖入即唤出
                             let edge_zone = ly >= 0.0 && ly <= 50.0 && lx >= 0.0 && lx <= r.win_w;
-                            (in_win, hover_zone, edge_zone)
+                            // 「拖入」手势：按下起点在顶部触发区之外（点击/拖动浏览器
+                            // 标签栏、标题栏的起点都在顶部条带内，不属于拖入文件），
+                            // 且从按下点已实际拖动（排除原地点击与手抖微移）
+                            let drag_entered = DRAG_ORIGIN
+                                .lock()
+                                .unwrap()
+                                .map(|(sx, sy)| {
+                                    let moved =
+                                        ((px - sx) * (px - sx) + (py - sy) * (py - sy)).sqrt();
+                                    sy / r.scale > 50.0 && moved >= DRAG_MOVE_PX
+                                })
+                                .unwrap_or(false);
+                            (in_win, hover_zone, edge_zone, drag_entered)
                         })
-                        .unwrap_or((false, false, false))
+                        .unwrap_or((false, false, false, false))
                 };
 
-                // 顶部拖拽状态机：拖拽文件进入顶部 20px 触发区（与 mac 一致）
-                // 立即唤出；已唤出后条带内（in_win）拖拽仅维持状态不重复触发，
+                // 顶部拖拽状态机：拖拽文件从条带外拖入顶部触发区立即唤出；
+                // 已唤出后条带内（in_win）拖拽仅维持状态不重复触发，
                 // 松开时钩子侧 in_win 保持接收事件，放置区域不变
-                if left_down && edge_zone {
+                if left_down && edge_zone && drag_entered {
                     if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
                         let _ = app.emit("show-rope", ());
                     }
@@ -336,6 +372,18 @@ unsafe extern "system" fn hook_proc(
                     let _ = tx.send(Msg::Wheel { dx, dy });
                 }
                 return LRESULT(1); // 拦截，避免底下的窗口同时滚动
+            }
+        }
+        // 左键按下/抬起：事件级精确记录全局按下起点（物理像素）。
+        // 轮询线程据此判定「拖入文件」——起点在顶部条带内的按住（点击/拖动
+        // 浏览器标签栏、标题栏）不是拖入；事件级记录无采样延迟，
+        // 避免快速甩动 tab 时起点被 60ms 轮询记到条带外造成误判
+        if !injected && (msg == 0x0201 || msg == 0x0202) {
+            let mut origin = DRAG_ORIGIN.lock().unwrap();
+            if msg == 0x0201 {
+                *origin = Some((info.pt.x as f64, info.pt.y as f64));
+            } else {
+                *origin = None;
             }
         }
         // 移动/按键才判断；注入事件忽略，避免程序化输入干扰
@@ -455,26 +503,49 @@ fn start_macos_poll(app: AppHandle) {
             let (lx, ly) = mouse_pos_logical();
             let lbutton = pressed_left_button();
 
-            let (in_win, hover_zone, edge_zone) = {
+            // 按下起点跟踪（沿检测；tap 版由事件级记录，两者共用同一状态）
+            {
+                let mut origin = DRAG_ORIGIN.lock().unwrap();
+                if lbutton {
+                    if origin.is_none() {
+                        *origin = Some((lx, ly));
+                    }
+                } else {
+                    *origin = None;
+                }
+            }
+
+            let (in_win, hover_zone, edge_zone, drag_entered) = {
                 let guard = REGIONS.lock().unwrap();
                 guard
                     .as_ref()
                     .map(|r| {
                         // macOS 光标坐标已是逻辑点，无需除以 scale。
                         // 悬停触发区：最顶端 2 逻辑像素内（停留 1s 唤出）；
-                        // 拖拽触发区：放宽到顶部 20 逻辑像素内，拖入即唤出
+                        // 拖拽触发区：顶部 20 逻辑像素内，拖入即唤出
                         let in_win = ly >= 0.0 && ly <= r.panel_h && lx >= 0.0 && lx <= r.win_w;
                         let hover_zone = ly >= 0.0 && ly <= 2.0 && lx >= 0.0 && lx <= r.win_w;
                         let edge_zone = ly >= 0.0 && ly <= 20.0 && lx >= 0.0 && lx <= r.win_w;
-                        (in_win, hover_zone, edge_zone)
+                        // 「拖入」手势：按下起点在顶部触发区外且已实际拖动
+                        // （与 Windows 一致：点击/拖动窗口标题栏、标签栏不算拖入）
+                        let drag_entered = DRAG_ORIGIN
+                            .lock()
+                            .unwrap()
+                            .map(|(sx, sy)| {
+                                let moved =
+                                    ((lx - sx) * (lx - sx) + (ly - sy) * (ly - sy)).sqrt();
+                                sy > 20.0 && moved >= DRAG_MOVE_PX
+                            })
+                            .unwrap_or(false);
+                        (in_win, hover_zone, edge_zone, drag_entered)
                     })
-                    .unwrap_or((false, false, false))
+                    .unwrap_or((false, false, false, false))
             };
 
-            // 顶部拖拽状态机：拖拽文件进入顶部 20px 触发区立即唤出；
+            // 顶部拖拽状态机：拖拽文件从条带外拖入顶部触发区立即唤出；
             // 已唤出后条带内（in_win）拖拽仅维持状态不重复触发，
             // 松开时轮询侧 in_win 保持接收事件，放置区域不变
-            if lbutton && edge_zone {
+            if lbutton && edge_zone && drag_entered {
                 if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
                     let _ = app.emit("show-rope", ());
                 }
@@ -702,32 +773,60 @@ extern "C" fn cg_tap_callback(
     let (lx, ly) = (pt.x, pt.y);
     let lbutton = (CGEventGetIntegerValueField(event, BUTTON_STATE) & 1) != 0;
 
-    let (in_win, hover_zone, edge_zone, hit, scrollable, revealed) = {
+    // 按下起点跟踪：事件级精确记录（LEFT_DOWN/LEFT_UP），
+    // 沿检测兜底（漏 DOWN 事件时最多滞后一个事件）
+    if event_type == LEFT_DOWN {
+        *DRAG_ORIGIN.lock().unwrap() = Some((lx, ly));
+    } else if event_type == LEFT_UP {
+        *DRAG_ORIGIN.lock().unwrap() = None;
+    } else {
+        let mut origin = DRAG_ORIGIN.lock().unwrap();
+        if lbutton {
+            if origin.is_none() {
+                *origin = Some((lx, ly));
+            }
+        } else {
+            *origin = None;
+        }
+    }
+
+    let (in_win, hover_zone, edge_zone, drag_entered, hit, scrollable, revealed) = {
         let guard = REGIONS.lock().unwrap();
         match guard.as_ref() {
             Some(r) => {
                 let in_win = ly >= 0.0 && ly <= r.panel_h && lx >= 0.0 && lx <= r.win_w;
                 // 悬停触发区：最顶端 2 逻辑像素内（停留 1s 唤出）；
-                // 拖拽触发区：放宽到顶部 20 逻辑像素内，拖入即唤出
+                // 拖拽触发区：顶部 20 逻辑像素内，拖入即唤出
                 let hover_zone = ly >= 0.0 && ly <= 2.0 && lx >= 0.0 && lx <= r.win_w;
                 let edge_zone = ly >= 0.0 && ly <= 20.0 && lx >= 0.0 && lx <= r.win_w;
+                // 「拖入」手势：按下起点在顶部触发区外且已实际拖动
+                // （与 Windows 一致：点击/拖动窗口标题栏、标签栏不算拖入）
+                let drag_entered = DRAG_ORIGIN
+                    .lock()
+                    .unwrap()
+                    .map(|(sx, sy)| {
+                        let moved = ((lx - sx) * (lx - sx) + (ly - sy) * (ly - sy)).sqrt();
+                        sy > 20.0 && moved >= DRAG_MOVE_PX
+                    })
+                    .unwrap_or(false);
                 let hit = r.rects.iter().any(|rc| in_rect(lx, ly, rc));
                 (
                     in_win,
                     hover_zone,
                     edge_zone,
+                    drag_entered,
                     hit,
                     r.scrollable,
                     REVEALED.load(Ordering::SeqCst),
                 )
             }
-            None => (false, false, false, false, false, false),
+            None => (false, false, false, false, false, false, false),
         }
     };
 
-    // 顶部拖拽状态机（与轮询版一致）：拖拽文件进入顶部 20px 触发区立即唤出；
+    // 顶部拖拽状态机（与轮询版一致）：拖拽文件从条带外拖入顶部触发区立即唤出；
     // 已唤出后条带内（in_win）拖拽仅维持状态不重复触发，放置区域不变
-    if lbutton && edge_zone {
+    if lbutton && edge_zone && drag_entered {
         if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
             if let Some(app) = APP.get() {
                 let _ = app.emit("show-rope", ());
