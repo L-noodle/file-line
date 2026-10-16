@@ -5,6 +5,7 @@
 //! - macOS：NSEvent 轮询（mouseLocation / pressedMouseButtons），无需辅助功能权限，
 //!   等价于 Windows 的轮询线程，并据此切换点击穿透。
 
+#[cfg(target_os = "macos")]
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -60,6 +61,8 @@ enum Msg {
 static TX: OnceLock<Sender<Msg>> = OnceLock::new();
 
 /// 往应用线程发消息（窗口穿透切换 / 事件转发都走这里，避免在非主线程直接操作窗口）。
+/// 仅 macOS CGEventTap 回调使用（Windows 钩子路径内联发送）。
+#[cfg(target_os = "macos")]
 fn tx_send(msg: Msg) {
     if let Some(tx) = TX.get() {
         let _ = tx.send(msg);
