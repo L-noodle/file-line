@@ -6,6 +6,7 @@ import { Spring } from "../spring";
 // active：拖拽悬停在可放置区时，叠加彩色流动层作为"可松手"反馈。
 export default function Rope({ width, active }: { width: number; active?: boolean }) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const flowGradRef = useRef<SVGLinearGradientElement>(null);
 
   // 唤出弹性：绳先绷紧（下垂 30%），面板滑入后松手——
   // 下垂量欠阻尼弹到自然值，像被一串卡片坠得弹动几下
@@ -69,6 +70,27 @@ export default function Rope({ width, active }: { width: number; active?: boolea
   // 渐变平移周期（与色带 x 范围一致，保证无缝循环）
   const span = width + 40;
 
+  // 彩色沿绳流动：手动 rAF 平移渐变。
+  // 不用 SMIL <animateTransform>——WebKit（macOS 的 WKWebView）对作用在 <defs>
+  // 内渐变的 gradientTransform 上的 SMIL 不可靠，会整段不播放，只剩静止色带。
+  useEffect(() => {
+    const grad = flowGradRef.current;
+    if (!active || !grad) return;
+    const dur = 1600;
+    const start = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      const x = (((now - start) / dur) % 1) * span;
+      grad.setAttribute("gradientTransform", `translate(${x.toFixed(2)} 0)`);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      grad.removeAttribute("gradientTransform");
+    };
+  }, [active, span]);
+
   return (
     <svg
       className={"rope" + (active ? " drag-hover" : "")}
@@ -90,6 +112,7 @@ export default function Rope({ width, active }: { width: number; active?: boolea
         </mask>
         {/* 可放置反馈：循环色带 + 平移动画 = 彩色沿绳流动 */}
         <linearGradient
+          ref={flowGradRef}
           id={flowId}
           gradientUnits="userSpaceOnUse"
           x1={-20}
@@ -103,14 +126,6 @@ export default function Rope({ width, active }: { width: number; active?: boolea
           <stop offset="0.5" stopColor="#e879f9" />
           <stop offset="0.75" stopColor="#fbbf24" />
           <stop offset="1" stopColor="#22d3ee" />
-          <animateTransform
-            attributeName="gradientTransform"
-            type="translate"
-            from="0 0"
-            to={`${span} 0`}
-            dur="1.6s"
-            repeatCount="indefinite"
-          />
         </linearGradient>
       </defs>
       <g mask={`url(#${maskId}-m)`}>
