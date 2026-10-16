@@ -40,9 +40,8 @@ static PANEL_HOVER: AtomicBool = AtomicBool::new(false);
 /// 面板是否显示（show_rope / hide_rope 同步），滚轮拦截仅在显示时生效。
 static REVEALED: AtomicBool = AtomicBool::new(false);
 
-/// 顶部拖拽检测：光标在主屏顶部且左键按住
-static TOP_ACTIVE: AtomicBool = AtomicBool::new(false);
-static TOP_SINCE: AtomicU64 = AtomicU64::new(0); // 0 = 未开始，否则为起始毫秒时间戳
+/// 顶部拖拽检测：光标进入顶部触发区且左键按住（Win 贴顶 / mac 顶部 20px），
+/// 进入即唤出；已唤出后条带内拖拽仅维持状态。TOP_SHOWN 为防重复 emit 的锁。
 static TOP_SHOWN: AtomicBool = AtomicBool::new(false);
 
 /// 顶部悬停检测：光标（无需按键）停留在主屏顶部 20px 内
@@ -72,12 +71,17 @@ static LAST_MOUSE: Mutex<Option<(f64, f64)>> = Mutex::new(None);
 
 /// 绳子隐藏时重置全部顶部触发状态，保证下次悬停/拖拽能重新触发。
 pub fn reset_triggers() {
-    TOP_ACTIVE.store(false, Ordering::SeqCst);
-    TOP_SINCE.store(0, Ordering::SeqCst);
     TOP_SHOWN.store(false, Ordering::SeqCst);
     HOVER_ACTIVE.store(false, Ordering::SeqCst);
     HOVER_SINCE.store(0, Ordering::SeqCst);
     HOVER_SHOWN.store(false, Ordering::SeqCst);
+    // 若残留「可命中」状态（如拖拽收起瞬间的竞态），恢复鼠标穿透：
+    // 否则隐藏/收起中的条带会吃掉下方窗口在顶部区域的点击与拖拽
+    if CAPTURING.swap(false, Ordering::SeqCst) {
+        if let Some(tx) = TX.get() {
+            let _ = tx.send(Msg::Capture(false));
+        }
+    }
 }
 
 /// 前端右键菜单等 UI 需要临时强制可交互。
@@ -188,7 +192,7 @@ pub fn start(app: AppHandle) {
 fn start_windows(app: AppHandle) {
     // 顶部触发检测线程：主动轮询光标位置与左键状态，而非依赖鼠标消息驱动。
     // 光标贴屏幕最顶端静止时消息流可能中断（坐标钳位/注入过滤等），
-    // 轮询保证悬停 0.5s / 拖拽 0.3s 计时稳定进行。
+    // 轮询保证悬停 1s 计时稳定进行。
     {
         let app = app.clone();
         std::thread::spawn(move || unsafe {
@@ -208,40 +212,30 @@ fn start_windows(app: AppHandle) {
                 // 拖动窗口（前台线程处于移动/缩放循环）不算拖入文件，晾衣绳不出现
                 let left_down = lbutton && !fg_in_move_size();
 
-                let (in_win, top_zone, hover_zone, edge_zone) = {
+                let (in_win, hover_zone, edge_zone) = {
                     let guard = REGIONS.lock().unwrap();
                     guard
                         .as_ref()
                         .map(|r| {
                             let (lx, ly) = (px / r.scale, py / r.scale);
                             let in_win = ly >= 0.0 && ly <= r.panel_h && lx >= 0.0 && lx <= r.win_w;
-                            // 顶部拖拽区：主屏顶部 100 物理像素
-                            let top_zone = px >= 0.0 && py >= 0.0 && py < 100.0 && px <= r.win_w * r.scale;
-                            // 顶部悬停区：主屏顶部 20 逻辑像素（无需按键）
-                            let hover_zone = px >= 0.0 && ly >= 0.0 && ly < 20.0 && px <= r.win_w * r.scale;
-                            // 贴边区：主屏最顶端 2 物理像素内
-                            let edge_zone = px >= 0.0 && py >= 0.0 && py <= 2.0 && px <= r.win_w * r.scale;
-                            (in_win, top_zone, hover_zone, edge_zone)
+                            // 悬停触发区：主屏最顶端 2 物理像素内（停留 1s 唤出）；
+                            // 拖拽触发区：顶部 5 逻辑像素内，拖入即唤出
+                            let hover_zone = px >= 0.0 && py >= 0.0 && py <= 2.0 && px <= r.win_w * r.scale;
+                            let edge_zone = ly >= 0.0 && ly <= 50.0 && lx >= 0.0 && lx <= r.win_w;
+                            (in_win, hover_zone, edge_zone)
                         })
-                        .unwrap_or((false, false, false, false))
+                        .unwrap_or((false, false, false))
                 };
 
-                // 顶部拖拽状态机：贴到屏幕最顶端（≤2px）立即唤出，
-                // 其余顶部区域/条带内停留 0.3s 才触发
+                // 顶部拖拽状态机：拖拽文件进入顶部 20px 触发区（与 mac 一致）
+                // 立即唤出；已唤出后条带内（in_win）拖拽仅维持状态不重复触发，
+                // 松开时钩子侧 in_win 保持接收事件，放置区域不变
                 if left_down && edge_zone {
-                    TOP_SINCE.store(now_ms(), Ordering::SeqCst);
-                    TOP_ACTIVE.store(true, Ordering::SeqCst);
                     if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
                         let _ = app.emit("show-rope", ());
                     }
-                } else if left_down && (top_zone || in_win) {
-                    if TOP_SINCE.load(Ordering::SeqCst) == 0 {
-                        TOP_SINCE.store(now_ms(), Ordering::SeqCst);
-                    }
-                    TOP_ACTIVE.store(true, Ordering::SeqCst);
-                } else {
-                    TOP_ACTIVE.store(false, Ordering::SeqCst);
-                    TOP_SINCE.store(0, Ordering::SeqCst);
+                } else if !(left_down && in_win) {
                     TOP_SHOWN.store(false, Ordering::SeqCst);
                 }
 
@@ -257,17 +251,9 @@ fn start_windows(app: AppHandle) {
                     HOVER_SHOWN.store(false, Ordering::SeqCst);
                 }
 
-                if !TOP_SHOWN.load(Ordering::SeqCst) && TOP_ACTIVE.load(Ordering::SeqCst) {
-                    let since = TOP_SINCE.load(Ordering::SeqCst);
-                    if since > 0 && now_ms().saturating_sub(since) >= 150 {
-                        if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
-                            let _ = app.emit("show-rope", ());
-                        }
-                    }
-                }
                 if !HOVER_SHOWN.load(Ordering::SeqCst) && HOVER_ACTIVE.load(Ordering::SeqCst) {
                     let since = HOVER_SINCE.load(Ordering::SeqCst);
-                    if since > 0 && now_ms().saturating_sub(since) >= 500 {
+                    if since > 0 && now_ms().saturating_sub(since) >= 700 {
                         if !HOVER_SHOWN.swap(true, Ordering::SeqCst) {
                             let _ = app.emit("show-rope", ());
                         }
@@ -357,11 +343,15 @@ unsafe extern "system" fn hook_proc(
         if interesting && !injected {
             let left_down = msg == 0x0201 // WM_LBUTTONDOWN
                 || (msg == 0x0200 && (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0);
+            // 拖动其他软件的窗口（前台线程进入移动/缩放循环）不是拖文件：
+            // 与轮询线程一致排除，否则条带会在收起动画期间挡住下方窗口的拖拽
+            let drag_file = left_down && !fg_in_move_size();
 
             let (px, py) = (info.pt.x as f64, info.pt.y as f64);
             let over = OVERRIDE.load(Ordering::SeqCst);
+            let revealed = REVEALED.load(Ordering::SeqCst);
             let guard = REGIONS.lock().unwrap();
-            let (capture, in_win, lx, ly) = if let Some(r) = guard.as_ref() {
+            let (hit, in_win, lx, ly) = if let Some(r) = guard.as_ref() {
                 let (lx, ly) = (px / r.scale, py / r.scale);
                 let hit = r.rects.iter().any(|rc| in_rect(lx, ly, rc));
                 let in_win = ly >= 0.0 && ly <= r.panel_h && lx >= 0.0 && lx <= r.win_w;
@@ -371,9 +361,13 @@ unsafe extern "system" fn hook_proc(
             };
             drop(guard);
 
-            // 拖拽中（左键按住，含外部拖文件进来）：条带内强制接收鼠标事件，
-            // 否则窗口穿透会让 OLE 拖放目标解析不到 WebView2，drop 落不进来
-            let capture = over || capture || (left_down && in_win);
+            // 仅在面板已唤出（REVEALED）时条带才可命中：
+            // - 拖文件中（drag_file）条带内强制接收鼠标事件，否则窗口穿透
+            //   会让 OLE 拖放目标解析不到 WebView2，drop 落不进来；
+            // - 卡片命中区（hit）同样门控，避免隐藏后残留的 rects 吞点击。
+            // 面板隐藏 / 收起动画期间一律穿透，顶部区域的点击与
+            // 拖拽（含拖其他软件窗口）直达下方窗口
+            let capture = over || (revealed && (hit || (drag_file && in_win)));
             if CAPTURING.load(Ordering::SeqCst) != capture {
                 CAPTURING.store(capture, Ordering::SeqCst);
                 if let Some(tx) = TX.get() {
@@ -458,37 +452,30 @@ fn start_macos_poll(app: AppHandle) {
             let (lx, ly) = mouse_pos_logical();
             let lbutton = pressed_left_button();
 
-            let (in_win, top_zone, hover_zone, edge_zone) = {
+            let (in_win, hover_zone, edge_zone) = {
                 let guard = REGIONS.lock().unwrap();
                 guard
                     .as_ref()
                     .map(|r| {
-                        // macOS 光标坐标已是逻辑点，无需除以 scale
+                        // macOS 光标坐标已是逻辑点，无需除以 scale。
+                        // 悬停触发区：最顶端 2 逻辑像素内（停留 1s 唤出）；
+                        // 拖拽触发区：放宽到顶部 20 逻辑像素内，拖入即唤出
                         let in_win = ly >= 0.0 && ly <= r.panel_h && lx >= 0.0 && lx <= r.win_w;
-                        let top_zone = ly >= 0.0 && ly < 100.0 && lx >= 0.0 && lx <= r.win_w;
-                        let hover_zone = ly >= 0.0 && ly < 20.0 && lx >= 0.0 && lx <= r.win_w;
-                        let edge_zone = ly >= 0.0 && ly <= 2.0 && lx >= 0.0 && lx <= r.win_w;
-                        (in_win, top_zone, hover_zone, edge_zone)
+                        let hover_zone = ly >= 0.0 && ly <= 2.0 && lx >= 0.0 && lx <= r.win_w;
+                        let edge_zone = ly >= 0.0 && ly <= 20.0 && lx >= 0.0 && lx <= r.win_w;
+                        (in_win, hover_zone, edge_zone)
                     })
-                    .unwrap_or((false, false, false, false))
+                    .unwrap_or((false, false, false))
             };
 
-            // 顶部拖拽状态机：贴到屏幕最顶端（≤2px）立即唤出，
-            // 其余顶部区域/条带内停留 150ms 才触发
+            // 顶部拖拽状态机：拖拽文件进入顶部 20px 触发区立即唤出；
+            // 已唤出后条带内（in_win）拖拽仅维持状态不重复触发，
+            // 松开时轮询侧 in_win 保持接收事件，放置区域不变
             if lbutton && edge_zone {
-                TOP_SINCE.store(now_ms(), Ordering::SeqCst);
-                TOP_ACTIVE.store(true, Ordering::SeqCst);
                 if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
                     let _ = app.emit("show-rope", ());
                 }
-            } else if lbutton && (top_zone || in_win) {
-                if TOP_SINCE.load(Ordering::SeqCst) == 0 {
-                    TOP_SINCE.store(now_ms(), Ordering::SeqCst);
-                }
-                TOP_ACTIVE.store(true, Ordering::SeqCst);
-            } else {
-                TOP_ACTIVE.store(false, Ordering::SeqCst);
-                TOP_SINCE.store(0, Ordering::SeqCst);
+            } else if !(lbutton && in_win) {
                 TOP_SHOWN.store(false, Ordering::SeqCst);
             }
 
@@ -504,17 +491,9 @@ fn start_macos_poll(app: AppHandle) {
                 HOVER_SHOWN.store(false, Ordering::SeqCst);
             }
 
-            if !TOP_SHOWN.load(Ordering::SeqCst) && TOP_ACTIVE.load(Ordering::SeqCst) {
-                let since = TOP_SINCE.load(Ordering::SeqCst);
-                if since > 0 && now_ms().saturating_sub(since) >= 150 {
-                    if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
-                        let _ = app.emit("show-rope", ());
-                    }
-                }
-            }
             if !HOVER_SHOWN.load(Ordering::SeqCst) && HOVER_ACTIVE.load(Ordering::SeqCst) {
                 let since = HOVER_SINCE.load(Ordering::SeqCst);
-                if since > 0 && now_ms().saturating_sub(since) >= 500 {
+                if since > 0 && now_ms().saturating_sub(since) >= 700 {
                     if !HOVER_SHOWN.swap(true, Ordering::SeqCst) {
                         let _ = app.emit("show-rope", ());
                     }
@@ -720,18 +699,18 @@ extern "C" fn cg_tap_callback(
     let (lx, ly) = (pt.x, pt.y);
     let lbutton = (CGEventGetIntegerValueField(event, BUTTON_STATE) & 1) != 0;
 
-    let (in_win, top_zone, hover_zone, edge_zone, hit, scrollable, revealed) = {
+    let (in_win, hover_zone, edge_zone, hit, scrollable, revealed) = {
         let guard = REGIONS.lock().unwrap();
         match guard.as_ref() {
             Some(r) => {
                 let in_win = ly >= 0.0 && ly <= r.panel_h && lx >= 0.0 && lx <= r.win_w;
-                let top_zone = ly >= 0.0 && ly < 100.0 && lx >= 0.0 && lx <= r.win_w;
-                let hover_zone = ly >= 0.0 && ly < 20.0 && lx >= 0.0 && lx <= r.win_w;
-                let edge_zone = ly >= 0.0 && ly <= 2.0 && lx >= 0.0 && lx <= r.win_w;
+                // 悬停触发区：最顶端 2 逻辑像素内（停留 1s 唤出）；
+                // 拖拽触发区：放宽到顶部 20 逻辑像素内，拖入即唤出
+                let hover_zone = ly >= 0.0 && ly <= 2.0 && lx >= 0.0 && lx <= r.win_w;
+                let edge_zone = ly >= 0.0 && ly <= 20.0 && lx >= 0.0 && lx <= r.win_w;
                 let hit = r.rects.iter().any(|rc| in_rect(lx, ly, rc));
                 (
                     in_win,
-                    top_zone,
                     hover_zone,
                     edge_zone,
                     hit,
@@ -739,27 +718,19 @@ extern "C" fn cg_tap_callback(
                     REVEALED.load(Ordering::SeqCst),
                 )
             }
-            None => (false, false, false, false, false, false, false),
+            None => (false, false, false, false, false, false),
         }
     };
 
-    // 顶部拖拽 / 悬停状态机（与轮询版一致，保证从屏幕顶部唤出绳子）
+    // 顶部拖拽状态机（与轮询版一致）：拖拽文件进入顶部 20px 触发区立即唤出；
+    // 已唤出后条带内（in_win）拖拽仅维持状态不重复触发，放置区域不变
     if lbutton && edge_zone {
-        TOP_SINCE.store(now_ms(), Ordering::SeqCst);
-        TOP_ACTIVE.store(true, Ordering::SeqCst);
         if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
             if let Some(app) = APP.get() {
                 let _ = app.emit("show-rope", ());
             }
         }
-    } else if lbutton && (top_zone || in_win) {
-        if TOP_SINCE.load(Ordering::SeqCst) == 0 {
-            TOP_SINCE.store(now_ms(), Ordering::SeqCst);
-        }
-        TOP_ACTIVE.store(true, Ordering::SeqCst);
-    } else {
-        TOP_ACTIVE.store(false, Ordering::SeqCst);
-        TOP_SINCE.store(0, Ordering::SeqCst);
+    } else if !(lbutton && in_win) {
         TOP_SHOWN.store(false, Ordering::SeqCst);
     }
     if !lbutton && hover_zone {
@@ -772,19 +743,9 @@ extern "C" fn cg_tap_callback(
         HOVER_SINCE.store(0, Ordering::SeqCst);
         HOVER_SHOWN.store(false, Ordering::SeqCst);
     }
-    if !TOP_SHOWN.load(Ordering::SeqCst) && TOP_ACTIVE.load(Ordering::SeqCst) {
-        let since = TOP_SINCE.load(Ordering::SeqCst);
-        if since > 0 && now_ms().saturating_sub(since) >= 150 {
-            if !TOP_SHOWN.swap(true, Ordering::SeqCst) {
-                if let Some(app) = APP.get() {
-                    let _ = app.emit("show-rope", ());
-                }
-            }
-        }
-    }
     if !HOVER_SHOWN.load(Ordering::SeqCst) && HOVER_ACTIVE.load(Ordering::SeqCst) {
         let since = HOVER_SINCE.load(Ordering::SeqCst);
-        if since > 0 && now_ms().saturating_sub(since) >= 500 {
+        if since > 0 && now_ms().saturating_sub(since) >= 700 {
             if !HOVER_SHOWN.swap(true, Ordering::SeqCst) {
                 if let Some(app) = APP.get() {
                     let _ = app.emit("show-rope", ());

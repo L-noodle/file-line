@@ -86,7 +86,7 @@ export default function App() {
   dragHoverRef.current = dragHover;
   const hideTimer = useRef(0); // 闲置计时
   const animTimer = useRef(0); // 滑出动画后隐藏窗口
-  const HIDE_DELAY = 2000;
+  const HIDE_DELAY = 1000; // 移出晾衣绳区域 1s 后隐藏（win/mac 同路径）
   const ANIM_MS = 1330;
 
   const cancelHide = useCallback(() => {
@@ -214,6 +214,14 @@ export default function App() {
         // 掠过抢夺键盘焦点。激活为幂等操作，已前台时无副作用。
         if (IS_MAC && revealedRef.current) api.activateApp().catch(() => {});
       } else {
+        // 原生钩子已确认光标（含按住左键的文件拖拽）离开条带窗口。
+        // OLE（Windows）/ NSDragging（macOS）的拖放 leave 事件可能在条带
+        // 转回穿透态后丢失，dragHover 滞留 true 会挡住 scheduleHide，
+        // 导致拖拽取消后绳子一直挂着——以钩子为准清掉再排定隐藏
+        if (dragHoverRef.current) {
+          dragHoverRef.current = false;
+          setDragHover(false);
+        }
         scheduleHide();
       }
     });
@@ -251,7 +259,12 @@ export default function App() {
         reveal();
       } else if (e.payload.type === "leave") {
         wiggleDone = false;
-        if (IS_MAC) setDragHover(false);
+        if (IS_MAC) {
+          setDragHover(false);
+          // 直接清 ref（setState 异步渲染，scheduleHide 读到旧值会误判仍在拖拽）
+          dragHoverRef.current = false;
+          scheduleHide();
+        }
       }
     });
     const onResize = () => setWidth(window.innerWidth);
@@ -267,6 +280,9 @@ export default function App() {
           cancelHide();
         } else if (ty === "leave") {
           setDragHover(false);
+          // 直接清 ref（setState 异步渲染，scheduleHide 读到旧值会误判仍在拖拽）
+          dragHoverRef.current = false;
+          scheduleHide();
         } else {
           addPaths(e.payload.paths, "drag");
           setDragHover(false);
