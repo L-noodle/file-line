@@ -15,23 +15,27 @@ const writeIfChanged = (p, content) => {
 
 function sync() {
   const version = readJson(path.join(root, "package.json")).version;
+  let changed = false;
 
   // tauri.conf.json：控制安装包名（{productName}_{version}_{arch}-setup.exe）
   const confPath = path.join(root, "src-tauri", "tauri.conf.json");
   const conf = readJson(confPath);
-  conf.version = version;
-  writeIfChanged(confPath, JSON.stringify(conf, null, 2) + "\n");
+  if (conf.version !== version) {
+    conf.version = version;
+    writeIfChanged(confPath, JSON.stringify(conf, null, 2) + "\n");
+    changed = true;
+  }
 
   // Cargo.toml：仅替换 [package] 段的第一处 version
   const cargoPath = path.join(root, "src-tauri", "Cargo.toml");
-  writeIfChanged(
-    cargoPath,
-    fs
-      .readFileSync(cargoPath, "utf8")
-      .replace(/^version\s*=\s*"[^"]*"/m, `version = "${version}"`)
-  );
+  const cargoSrc = fs.readFileSync(cargoPath, "utf8");
+  const cargoVersion = cargoSrc.match(/^version\s*=\s*"([^"]*)"/m)?.[1];
+  if (cargoVersion !== version) {
+    writeIfChanged(cargoPath, cargoSrc.replace(/^version\s*=\s*"[^"]*"/m, `version = "${version}"`));
+    changed = true;
+  }
 
-  console.log(`版本号已同步: ${version}`);
+  console.log(changed ? `版本号已同步: ${version}` : `版本号已是 ${version}，无需写入`);
 }
 
 function collect() {
