@@ -10,13 +10,17 @@
   <a href="README.md">English</a> · <a href="docs/README.zh.md">中文</a>
 </p>
 
+### windows
 <img src="public/readme/desktop-demo.png" width="100%"/>
+
+### mac
+<img src="public/readme/mac-demo.png" width="100%"/>
 
 ### Demo Video
 
-<video src="public/readme/file-line使用视频.mp4" controls width="720"></video>
+<video src="public/readme/file-line.mp4" controls width="720"></video>
 
-> If your platform can't play the embedded video, watch the file directly: [public/readme/file-line使用视频.mp4](public/readme/file-line使用视频.mp4)
+> If your platform can't play the embedded video, watch the file directly: [public/readme/file-line.mp4](public/readme/file-line.mp4)
 
 ## Features
 

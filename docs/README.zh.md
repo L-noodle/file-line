@@ -14,9 +14,9 @@
 
 ### 演示视频
 
-<video src="../public/readme/file-line使用视频.mp4" controls width="720"></video>
+<video src="../public/readme/file-line.mp4" controls width="720"></video>
 
-> 若平台不支持内嵌播放，可直接观看视频文件：[public/readme/file-line使用视频.mp4](../public/readme/file-line使用视频.mp4)
+> 若平台不支持内嵌播放，可直接观看视频文件：[public/readme/file-line.mp4](../public/readme/file-line.mp4)
 
 ## 功能特性
 
