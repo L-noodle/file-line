@@ -398,11 +398,11 @@ html[data-theme="dark"] .card-name {
   stroke-width: 3;
 }
 
-/* 复制提示 */
+/* 复制提示：卡片内部底部居中 */
 .copied-tip {
   position: absolute;
   left: 50%;
-  bottom: -24px;
+  bottom: -14px;
   transform: translateX(-50%);
   background: rgba(30, 30, 34, 0.85);
   color: #fff;
