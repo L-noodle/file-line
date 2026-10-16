@@ -24,6 +24,7 @@ impl SizeKey {
     pub fn from_str(s: &str) -> SizeKey {
         match s {
             "small" => SizeKey::Small,
+            "medium" => SizeKey::Medium,
             "large" => SizeKey::Large,
             _ => SizeKey::Small,
         }

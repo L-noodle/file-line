@@ -8,6 +8,9 @@
   --shadow-card: 0 3px 10px rgba(0, 0, 0, 0.14), 0 10px 28px rgba(0, 0, 0, 0.1);
   --shadow-card-hover:
     0 6px 14px rgba(0, 0, 0, 0.2), 0 16px 36px rgba(0, 0, 0, 0.16);
+  /* 卡片内缩略图 / 图标的投影：让内容浮在白边相框之上 */
+  --shadow-content: 0 1px 2px rgba(0, 0, 0, 0.2), 0 3px 7px rgba(0, 0, 0, 0.16);
+  --shadow-content-dark: 0 1px 2px rgba(0, 0, 0, 0.45), 0 3px 9px rgba(0, 0, 0, 0.4);
 }
 
 /* 明暗主题由 JS（系统原生主题 + prefers-color-scheme）写入 <html data-theme>，
@@ -294,7 +297,11 @@ html[data-theme="dark"] .card::after {
   object-fit: contain;
   border: 0.5px solid rgba(255, 255, 255, 0.18);
   outline: 0.5px solid rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow-content);
   display: block;
+}
+html[data-theme="dark"] .card-img {
+  box-shadow: var(--shadow-content-dark);
 }
 
 /* 文件夹 / 文件卡片：高度随 photo-h 缩放（+26 容纳固定像素的文字区） */
