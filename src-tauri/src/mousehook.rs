@@ -292,7 +292,7 @@ fn start_windows(app: AppHandle) {
 
                 if !HOVER_SHOWN.load(Ordering::SeqCst) && HOVER_ACTIVE.load(Ordering::SeqCst) {
                     let since = HOVER_SINCE.load(Ordering::SeqCst);
-                    if since > 0 && now_ms().saturating_sub(since) >= 700 {
+                    if since > 0 && now_ms().saturating_sub(since) >= 500 {
                         if !HOVER_SHOWN.swap(true, Ordering::SeqCst) {
                             let _ = app.emit("show-rope", ());
                         }
@@ -567,7 +567,7 @@ fn start_macos_poll(app: AppHandle) {
 
             if !HOVER_SHOWN.load(Ordering::SeqCst) && HOVER_ACTIVE.load(Ordering::SeqCst) {
                 let since = HOVER_SINCE.load(Ordering::SeqCst);
-                if since > 0 && now_ms().saturating_sub(since) >= 700 {
+                if since > 0 && now_ms().saturating_sub(since) >= 500 {
                     if !HOVER_SHOWN.swap(true, Ordering::SeqCst) {
                         let _ = app.emit("show-rope", ());
                     }
@@ -847,7 +847,7 @@ extern "C" fn cg_tap_callback(
     }
     if !HOVER_SHOWN.load(Ordering::SeqCst) && HOVER_ACTIVE.load(Ordering::SeqCst) {
         let since = HOVER_SINCE.load(Ordering::SeqCst);
-        if since > 0 && now_ms().saturating_sub(since) >= 700 {
+        if since > 0 && now_ms().saturating_sub(since) >= 500 {
             if !HOVER_SHOWN.swap(true, Ordering::SeqCst) {
                 if let Some(app) = APP.get() {
                     let _ = app.emit("show-rope", ());
