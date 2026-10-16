@@ -10,7 +10,17 @@
   <a href="README.md">English</a> · <a href="docs/README.zh.md">中文</a>
 </p>
 
+### windows
 <img src="../public/readme/desktop-demo.png" width="100%"/>
+
+### mac
+<img src="../public/readme/mac-demo.png" width="100%"/>
+
+> Mac 版安装后打开提示文件损坏时，在终端执行以下脚本添加临时签名即可：
+>
+> ```bash
+> sudo xattr -rd com.apple.quarantine "/Applications/晾衣绳.app"
+> ```
 
 ### 演示视频
 

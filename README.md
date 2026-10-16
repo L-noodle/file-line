@@ -16,6 +16,12 @@
 ### mac
 <img src="public/readme/mac-demo.png" width="100%"/>
 
+> If the Mac version reports the file is damaged after installation, run the following command in the terminal:
+>
+> ```bash
+> sudo xattr -rd com.apple.quarantine "/Applications/晾衣绳.app"
+> ```
+
 ### Demo Video
 
 <video src="public/readme/file-line.mp4" controls width="720"></video>
