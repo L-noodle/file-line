@@ -43,9 +43,11 @@ impl SizeKey {
             SizeKey::Large => 1.0,
         }
     }
-    /// 条带高度：photoMaxHeight(104*scale) + 106，与前端一致。
+    /// 条带高度：photoMaxHeight(104*scale) + 118，与前端一致。
+    /// 118 的余量要容下卡片两行文件名 + Dock 放大 1.2 后的卡片底部，
+    /// 否则鼠标移入放大时卡片底部会被窗口裁掉（小档最紧张）。
     pub fn panel_height(&self) -> f64 {
-        (104.0 * self.scale()).round() + 106.0
+        (104.0 * self.scale()).round() + 118.0
     }
 }
 

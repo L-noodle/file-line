@@ -16,6 +16,7 @@ import {
   dockScale,
   DOCK_MAX,
   DOCK_RANGE,
+  NAME_SECOND_LINE,
   panelHeight,
   photoMaxHeight,
   PIN_ABOVE,
@@ -658,7 +659,8 @@ export default function App() {
       // 出来的卡片边缘上会被判为卡片外，事件就穿透到下面的窗口去了。
       // 卡片区之外仍保持穿透（条带空白不吞鼠标）。
       const cardW = cw * DOCK_MAX + 16;
-      const cardH = (26 + ph + 18) * DOCK_MAX + 14;
+      // +NAME_SECOND_LINE：文件名两行后的卡片下半部分也要能点到
+      const cardH = (26 + ph + 18 + NAME_SECOND_LINE) * DOCK_MAX + 14;
       for (const v of visibleItems) {
         const cx = visibleX(v.i, visCount, width, size) - shiftPx;
         const y = ropeY(cx, width) - PIN_ABOVE;
@@ -711,7 +713,7 @@ export default function App() {
     if (!revealed) mouseRef.current = null; // 面板隐藏时清状态，下次唤出从原始大小开始
     // 感应区底部：卡片区（含衣夹）下沿 + 14px 余量；低于此不触发（条带下半空白区）
     zoneBottomRef.current =
-      ROPE_TOP + sag(width) - PIN_ABOVE + 26 + photoMaxHeight(size) + 14;
+      ROPE_TOP + sag(width) - PIN_ABOVE + 26 + photoMaxHeight(size) + 14 + NAME_SECOND_LINE;
     const panel = panelRef.current;
     if (!panel) return;
     slotsRef.current = Array.from(

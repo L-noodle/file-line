@@ -1,6 +1,11 @@
 /* ===== 晾衣绳 Windows 版 ===== */
 
 :root {
+  /* 卡片内衬：白框与内容之间的留白。.card / .fan-card 共用，
+     文字区通过负 margin 吃掉它，让文件名尽量铺满卡面 */
+  --card-pad: 6px;
+  /* 白框（相框边）宽度，与内衬一起决定卡片内容区大小 */
+  --card-frame: 5px;
   --glass-light: rgba(252, 252, 253, 0.55);
   --glass-dark: rgba(38, 38, 42, 0.52);
   --stroke-light: rgba(255, 255, 255, 0.55);
@@ -258,8 +263,8 @@ html[data-theme="dark"] .clothespin {
   width: var(--card-w);
   margin-top: -8px;
   border-radius: 14px;
-  padding: 6px;
-  border: 5px solid #ffffff;
+  padding: var(--card-pad);
+  border: var(--card-frame) solid #ffffff;
   background: linear-gradient(145deg, #fafafa 60%, rgb(225, 228, 241) 100%);
   display: flex;
   align-items: center;
@@ -291,7 +296,9 @@ html[data-theme="dark"] .card::after {
 }
 
 .card-img {
-  max-width: calc(var(--card-w) - 14px);
+  /* 宽度按「卡片内容区」算：白框 + 内衬各留一份，
+     横图时左右留白与上下内衬一致（此前比内容区宽 8px，左右只剩 2px） */
+  max-width: calc(var(--card-w) - (var(--card-frame) + var(--card-pad)) * 2);
   max-height: var(--photo-h);
   border-radius: 10px;
   object-fit: contain;
@@ -304,17 +311,23 @@ html[data-theme="dark"] .card-img {
   box-shadow: var(--shadow-content-dark);
 }
 
-/* 文件夹 / 文件卡片：高度随 photo-h 缩放（+26 容纳固定像素的文字区） */
+/* 文件夹 / 文件卡片：高度随 photo-h 缩放。
+   横向用负 margin 抵消 .card 的内衬并只留 3px 呼吸位，
+   文件名可铺到白框内侧（此前左右各浪费约 15px，过早出现省略号）；
+   纵向内衬压到最小（上下各 5px + 段间 4px），内置图标卡片不再上下留白过多，
+   卡片变矮后 Dock 放大（×1.2，以挂点为原点向下生长）也不容易被条带窗口裁掉 */
 .card-tile {
-  width: calc(var(--card-w) - 14px);
-  max-height: calc(var(--photo-h) + 26px);
+  width: calc(100% + var(--card-pad) * 2);
+  margin-inline: calc(var(--card-pad) * -1);
+  /* 上限：缩略图（0.62×photo-h）+ 两行文件名（≈27px）+ 上下内衬 */
+  max-height: calc(var(--photo-h) * 0.62 + 40px);
   border-radius: 12px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 10px 8px;
+  gap: 4px;
+  padding: 5px 3px;
   overflow: hidden;
 }
 .folder-icon {
@@ -361,11 +374,17 @@ html[data-theme="dark"] .card-img {
   font-size: 11px;
   line-height: 1.2;
   color: #444;
+  width: 100%;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   text-align: center;
+  /* 最多两行：一行放得下就占一行，放不下才在第二行末尾出省略号。
+     长串无空格的文件名允许任意断行，尽量多露出字符 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 html[data-theme="dark"] .card-name {
   color: #ddd;
@@ -409,7 +428,7 @@ html[data-theme="dark"] .card-name {
 .copied-tip {
   position: absolute;
   left: 50%;
-  bottom: -14px;
+  bottom: -2px;
   transform: translateX(-50%);
   background: rgba(30, 30, 34, 0.85);
   color: #fff;
@@ -449,8 +468,8 @@ html[data-theme="dark"] .card-name {
   width: var(--card-w);
   margin-left: calc(var(--card-w) / -2);
   border-radius: 14px;
-  padding: 6px;
-  border: 5px solid #ffffff;
+  padding: var(--card-pad);
+  border: var(--card-frame) solid #ffffff;
   background: linear-gradient(145deg, #fafafa 60%, rgb(225, 228, 241) 100%);
   display: flex;
   align-items: center;

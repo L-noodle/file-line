@@ -18,6 +18,11 @@ export function photoMaxHeight(size: SizeKey): number {
   return Math.round(104 * scaleOf(size));
 }
 
+// 卡片文件名最多两行（.card-name 的 -webkit-line-clamp: 2）。第二行让卡片
+// 比单行高出约 11px × 1.2 ≈ 13px，取 14 留余量。鼠标命中区与 Dock 感应区
+// 必须同步加这段高度，否则鼠标落在第二行文字上时会被判在卡片外而穿透下去。
+export const NAME_SECOND_LINE = 14;
+
 export function cardWidth(size: SizeKey): number {
   return Math.round(150 * scaleOf(size));
 }
@@ -26,8 +31,13 @@ export function spacing(size: SizeKey): number {
   return cardWidth(size) + 24;
 }
 
+// 条带窗口高度（也是鼠标钩子判定「在条带内」的边界）。必须容得下：
+// 挂点 30.5（ROPE_TOP 10 + 最大下垂 30 - PIN_ABOVE 9.5）
+// + (衣夹 26 - 重叠 8 + 卡片最高 ~photo-h+40) × Dock 最大放大 1.2。
+// 余量不足时，鼠标移入放大后的卡片底部会被窗口裁掉（小档最紧张）。
+// ⚠️ 与 src-tauri/src/lib.rs 的 panel_height() 必须保持一致。
 export function panelHeight(size: SizeKey): number {
-  return photoMaxHeight(size) + 106;
+  return photoMaxHeight(size) + 118;
 }
 
 export function sag(width: number): number {
