@@ -19,7 +19,7 @@
 > If the Mac version reports the file is damaged after installation, run the following command in the terminal:
 >
 > ```bash
-> sudo xattr -rd com.apple.quarantine "/Applications/晾衣绳.app"
+> sudo xattr -rd com.apple.quarantine "/Applications/FileLine.app"
 > ```
 
 ### Demo Video
@@ -73,8 +73,9 @@ After the build completes, the artifacts are located at:
 
 | Artifact | Path |
 | --- | --- |
-| NSIS installer | `src-tauri\target\release\bundle\nsis\晾衣绳_0.1.0_x64-setup.exe` |
-| Portable single exe | `src-tauri\target\release\file-line.exe` |
+| NSIS installer | `src-tauri\target\release\bundle\nsis\FileLine_1.0.0_x64-setup.exe` |
+| Portable single exe | `src-tauri\target\release\FileLine.exe` |
+| Max app | `src-tauri\target\release\FileLine_1.0.0_aarch64` |
 
 - **Installer**: Double-click to install; includes Start Menu and uninstaller entries. The version number follows the `version` field in `tauri.conf.json` and `Cargo.toml`.
 - **Portable**: A single exe — copy it anywhere and use it without installation.
