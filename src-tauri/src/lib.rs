@@ -1,6 +1,7 @@
 mod clipboard;
 mod filedrop;
 mod mousehook;
+mod textdrag;
 mod thumbs;
 
 use std::fs;
@@ -81,6 +82,8 @@ fn state_path(app: &AppHandle) -> PathBuf {
 }
 
 /// 持久化条目：兼容旧的纯路径字符串格式。
+/// - 文件 / 文件夹卡片：{ path, source }
+/// - 便笺卡片：{ note_id }（正文存在 notes 里，卡片只是挂在绳上的一份视图）
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 enum PersistedItem {
@@ -89,14 +92,25 @@ enum PersistedItem {
         #[serde(default)]
         source: String,
     },
+    Note {
+        #[serde(alias = "noteId")]
+        note_id: String,
+    },
     Path(String),
 }
 
 impl PersistedItem {
-    fn path(&self) -> &str {
+    fn path(&self) -> Option<&str> {
         match self {
-            PersistedItem::Full { path, .. } => path,
-            PersistedItem::Path(p) => p,
+            PersistedItem::Full { path, .. } => Some(path),
+            PersistedItem::Path(p) => Some(p),
+            PersistedItem::Note { .. } => None,
+        }
+    }
+    fn note_id(&self) -> Option<&str> {
+        match self {
+            PersistedItem::Note { note_id } => Some(note_id),
+            _ => None,
         }
     }
     /// drag = 拖拽进入；其余一律视为剪贴板。
@@ -108,10 +122,33 @@ impl PersistedItem {
     }
 }
 
+/// 便笺（笔记本数据），与绳子上的卡片独立：卡片取下不影响便笺本体。
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct PersistedNote {
+    id: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default, alias = "updatedAt")]
+    updated_at: i64,
+    /// 置顶：固定到笔记本列表顶部
+    #[serde(default)]
+    pinned: bool,
+}
+
+/// 另存为时落地的便笺 txt（文件名由前端按内容前 10 字 + 序号算出）。
+#[derive(serde::Deserialize)]
+struct NoteFile {
+    name: String,
+    text: String,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct Persisted {
+    #[serde(default)]
     items: Vec<PersistedItem>,
     size: Option<String>,
+    #[serde(default)]
+    notes: Vec<PersistedNote>,
 }
 
 fn read_state(app: &AppHandle) -> Persisted {
@@ -137,15 +174,29 @@ fn get_state(app: AppHandle) -> serde_json::Value {
         "items": p.items.iter().map(|i| serde_json::json!({
             "path": i.path(),
             "source": i.source(),
+            "noteId": i.note_id(),
         })).collect::<Vec<_>>(),
-        "size": p.size
+        "size": p.size,
+        "notes": p.notes.iter().map(|n| serde_json::json!({
+            "id": n.id,
+            "text": n.text,
+            "updatedAt": n.updated_at,
+            "pinned": n.pinned,
+        })).collect::<Vec<_>>(),
     })
 }
 
 #[tauri::command]
-fn save_state(app: AppHandle, items: Vec<PersistedItem>) {
+fn save_state(app: AppHandle, items: Vec<PersistedItem>, notes: Vec<PersistedNote>) {
     let size = app.state::<AppState>().size.lock().unwrap().as_str().to_string();
-    write_state(&app, &Persisted { items, size: Some(size) });
+    write_state(
+        &app,
+        &Persisted {
+            items,
+            size: Some(size),
+            notes,
+        },
+    );
 }
 
 /// 默认程序打开。
@@ -224,7 +275,11 @@ fn open_with_shell(path: &str) -> Result<(), String> {
 /// 全部另存为：在用户选择的文件夹内新建「晾衣绳 + 年月日时分秒」子文件夹，
 /// 把绳子上的全部文件复制进去（重名自动加序号），完成后打开该子文件夹。
 #[tauri::command]
-fn save_to_folder(paths: Vec<String>, folder: String) -> Result<String, String> {
+fn save_to_folder(
+    paths: Vec<String>,
+    folder: String,
+    notes: Vec<NoteFile>,
+) -> Result<String, String> {
     let base = PathBuf::from(&folder);
     if !base.is_dir() {
         return Err(format!("目标文件夹不存在：{folder}"));
@@ -233,6 +288,10 @@ fn save_to_folder(paths: Vec<String>, folder: String) -> Result<String, String> 
     let stamp = chrono::Local::now().format("晾衣绳%Y%m%d%H%M%S");
     let dst_dir = base.join(format!("{stamp}"));
     fs::create_dir_all(&dst_dir).map_err(|e| format!("创建文件夹失败：{e}"))?;
+    for n in &notes {
+        let file = unique_path(&dst_dir, &format!("{}.txt", sanitize_file_name(&n.name)));
+        fs::write(&file, n.text.as_bytes()).map_err(|e| format!("写入便笺失败：{e}"))?;
+    }
     for p in &paths {
         let src = PathBuf::from(p);
         if !src.exists() {
@@ -266,6 +325,45 @@ fn save_to_folder(paths: Vec<String>, folder: String) -> Result<String, String> 
     Ok(dst)
 }
 
+/// 去掉文件名里的非法字符（Windows / macOS 通用），空名回退为「便笺」。
+fn sanitize_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') && !c.is_control())
+        .collect();
+    let cleaned = cleaned.trim().to_string();
+    if cleaned.is_empty() {
+        "便笺".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// 同目录下重名自动加序号（xxx (2).txt）。
+fn unique_path(dir: &PathBuf, file_name: &str) -> PathBuf {
+    let mut dst = dir.join(file_name);
+    if !dst.exists() {
+        return dst;
+    }
+    let stem = PathBuf::from(file_name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let ext = PathBuf::from(file_name)
+        .extension()
+        .map(|s| format!(".{}", s.to_string_lossy()));
+    let mut i = 2;
+    while dst.exists() {
+        let nn = match &ext {
+            Some(e) => format!("{} ({}){}", stem, i, e),
+            None => format!("{} ({})", stem, i),
+        };
+        dst = dir.join(nn);
+        i += 1;
+    }
+    dst
+}
+
 fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
@@ -285,6 +383,18 @@ fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
 #[tauri::command]
 fn copy_to_clipboard(path: String) -> Result<(), String> {
     clipboard::copy_file_to_clipboard(&path)
+}
+
+/// 便笺单击复制：写入纯文本（拖进输入框即可粘贴）。
+#[tauri::command]
+fn copy_text_to_clipboard(text: String) -> Result<(), String> {
+    clipboard::copy_text_to_clipboard(&text)
+}
+
+/// 把便笺正文作为文本拖出（Windows 自己走 OLE；macOS 由前端插件负责）。
+#[tauri::command]
+fn drag_text(app: AppHandle, text: String) -> Result<(), String> {
+    textdrag::start_text_drag(&app, &text)
 }
 
 /// 前端上报卡片命中区域（物理像素，屏幕坐标系），驱动点击穿透。
@@ -427,6 +537,8 @@ pub fn run() {
             show_in_folder,
             save_to_folder,
             copy_to_clipboard,
+            copy_text_to_clipboard,
+            drag_text,
             set_hit_rects,
             set_capture_override,
             make_thumb,
@@ -493,11 +605,19 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let medium = CheckMenuItem::with_id(app, "size-medium", "中", true, *cur_size == SizeKey::Medium, None::<&str>)?;
     let large = CheckMenuItem::with_id(app, "size-large", "大", true, *cur_size == SizeKey::Large, None::<&str>)?;
     let help = MenuItem::with_id(app, "help", "使用说明", true, None::<&str>)?;
+    // 便笺功能入口：置顶（使用说明之上），绳子没唤出时由前端一并唤出
+    let note_new = MenuItem::with_id(app, "note-new", "新增便笺", true, None::<&str>)?;
+    let note_open = MenuItem::with_id(app, "note-open", "打开笔记本", true, None::<&str>)?;
     let sep = tauri::menu::PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
     let size_menu = Submenu::with_items(app, "卡片大小", true, &[&small, &medium, &large])?;
-    let menu = Menu::with_items(app, &[&help, &sep, &size_menu, &autostart, &sep, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &note_new, &note_open, &sep, &help, &sep, &size_menu, &autostart, &sep, &quit,
+        ],
+    )?;
     drop(cur_size);
     drop(app_state);
 
@@ -516,6 +636,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(move |app, event| {
             let id = event.id().as_ref().to_string();
             match id.as_str() {
+                "note-new" => {
+                    // 新增便笺：前端建便笺、挂卡片并弹出编辑窗
+                    let _ = app.emit("tray-new-note", ());
+                }
+                "note-open" => {
+                    // 打开笔记本（便笺管理器）
+                    let _ = app.emit("tray-open-notebook", ());
+                }
                 "help" => {
                     // 弹出使用说明：由前端渲染与卡片同款的弹窗
                     let _ = app.emit("show-help", ());

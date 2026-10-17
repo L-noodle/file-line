@@ -5,34 +5,68 @@ import { getCurrentWindow, LogicalSize, currentMonitor } from "@tauri-apps/api/w
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import Rope from "./components/Rope";
 import PeggedCard from "./components/PeggedCard";
-import Clothespin from "./components/Clothespin";
+import NoteCard from "./components/NoteCard";
+import NoteEditor from "./components/NoteEditor";
+import Notebook from "./components/Notebook";
+import EntryCard from "./components/EntryCard";
 import OverflowFan from "./components/OverflowFan";
 import ContextMenu, { MenuState } from "./components/ContextMenu";
 import HelpDialog from "./components/HelpDialog";
-import type { Item } from "./types";
+import type { Rect } from "./components/WindowDialog";
+import type { Item, Note } from "./types";
 import { api } from "./api";
+import type { NoteFile } from "./api";
 import {
   cardWidth,
   dockScale,
   DOCK_MAX,
   DOCK_RANGE,
+  entryCardHeight,
+  entryCardWidth,
   NAME_SECOND_LINE,
+  noteCardHeight,
+  noteCardWidth,
   panelHeight,
   photoMaxHeight,
   PIN_ABOVE,
+  pitchBetween,
   ROPE_TOP,
   ropeY,
   sag,
   SizeKey,
   spacing,
   visibleCapacity,
-  visibleX,
+  visibleCenters,
+  WIDE_DOCK_MAX,
+  wideDockScale,
 } from "./layout";
 import { invoke } from "@tauri-apps/api/core";
 import { useTheme } from "./theme";
+import { setReordering } from "./reorderGuard";
 
 let seq = 1;
 const nextId = () => `i${seq++}`;
+let noteSeq = 1;
+const nextNoteId = () => `n${Date.now().toString(36)}-${noteSeq++}`;
+
+// 便笺管理入口卡片：常驻绳尾（最右）的虚拟卡片——不落盘、不可移除 / 拖动 / 右键。
+// 空绳时它是唯一一张（居中）；有卡片时永远在最右，滚轮回看折叠时随堆叠一起收起
+const ENTRY_INDEX = 1_000_000; // 仅表示"永远排在最后"；z 序另用 entryZ 动态计算
+const entryItem: Item = {
+  id: "entry",
+  path: "",
+  name: "便笺管理",
+  kind: "entry",
+  tilt: (Math.random() * 2 - 1) * 2.5,
+  index: ENTRY_INDEX,
+  source: "clip",
+};
+
+/** 另存为的便笺文件名：正文（去首尾空格）前 10 字 + 下划线 + 序号 */
+function noteFileName(text: string, index: number): string {
+  const head = text.trim().slice(0, 10);
+  return `${head || "便笺"}_${index}`;
+}
 
 // 运行时平台判断：Windows 的彩虹渐变由 native-drop（OLE）驱动，macOS 由 Tauri 跨平台
 // 拖放事件驱动。用 IS_MAC 把 onDragDropEvent 里的 dragHover 逻辑物理隔离到 macOS，
@@ -53,6 +87,53 @@ export default function App() {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [helpOpen, setHelpOpen] = useState(false); // 使用说明弹窗（托盘菜单触发）
   const [helpRect, setHelpRect] = useState<HelpRect | null>(null); // 弹窗当前矩形（驱动命中区上报）
+  // ---------- 便笺 / 笔记本 ----------
+  const [notes, setNotes] = useState<Note[]>([]); // 笔记本数据（卡片取下不影响）
+  const notesRef = useRef<Note[]>([]);
+  notesRef.current = notes;
+  // 便笺编辑弹窗（可同时开多个；同一便笺只开一个，重复触发就是置顶）
+  // creating = 本次是新建（空内容提交则丢弃）
+  const [editors, setEditors] = useState<
+    { noteId: string; cardId: string; text: string; creating: boolean }[]
+  >([]);
+  const editorsRef = useRef(editors);
+  editorsRef.current = editors;
+  const [notebookOpen, setNotebookOpen] = useState(false);
+  // 弹窗层级：key → 序号，点谁谁 +1 置顶（各弹窗独立层级）
+  const zRef = useRef(0);
+  const [zMap, setZMap] = useState<Record<string, number>>({});
+  const bringToFront = useCallback((key: string) => {
+    zRef.current += 1;
+    const v = zRef.current;
+    setZMap((prev) => ({ ...prev, [key]: v }));
+  }, []);
+  const editorKey = (noteId: string) => `editor:${noteId}`;
+  const NOTEBOOK_KEY = "notebook";
+  // 便笺 / 笔记本弹窗矩形（按 id 分开存，两个弹窗可同时打开）
+  const [dlgRects, setDlgRects] = useState<Record<string, Rect>>({});
+  const reportRect = useCallback((id: string, r: Rect | null) => {
+    setDlgRects((prev) => {
+      if (!r) {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      }
+      const p = prev[id];
+      if (p && p.x === r.x && p.y === r.y && p.w === r.w && p.h === r.h)
+        return prev;
+      return { ...prev, [id]: r };
+    });
+  }, []);
+  const editorRectFor = useCallback(
+    (noteId: string) => (r: Rect | null) => reportRect(editorKey(noteId), r),
+    [reportRect]
+  );
+  const notebookRect = useCallback(
+    (r: Rect | null) => reportRect(NOTEBOOK_KEY, r),
+    [reportRect]
+  );
+  const loadedRef = useRef(false); // 初始状态读完前不回写，避免覆盖持久化数据
   const [width, setWidth] = useState(window.innerWidth);
   const [dragHover, setDragHover] = useState(false); // 外部拖拽悬停在可放置区（绳子彩色流动反馈）
   const [scrollPx, setScrollPx] = useState(0); // 滚轮回看偏移 px（0 = 最新卡片靠右）
@@ -75,8 +156,20 @@ export default function App() {
   helpOpenRef.current = helpOpen;
   // 右键菜单打开时窗口是否被临时加高（菜单高度动态，可能超出条带窗口）
   const menuExpandedRef = useRef(false);
-  // 使用说明弹窗打开期间窗口是否被临时全屏化
-  const helpFullRef = useRef(false);
+  // 当前为菜单把窗口加高到的逻辑高度（0 = 窗口仍在条带原始高度）。
+  // 记录「我们下发过的目标高度」而不是读 window.innerHeight：窗口尺寸是
+  // 异步生效的，连续右键时读到的是上一次加高后的旧值
+  const menuHRef = useRef(0);
+  // 菜单关闭后恢复条带高度的延时器（连续右键时会被下一次开菜单取消）
+  const menuRestoreTimer = useRef(0);
+  // 已下发但还没完成的恢复 IPC（下次加高要排在它后面）
+  const menuRestoreP = useRef<Promise<unknown> | null>(null);
+  // 弹窗（使用说明 / 便笺 / 笔记本）打开期间窗口是否被临时全屏化
+  const modalFullRef = useRef(false);
+  // 任一弹窗打开：不自动收起绳子（弹窗期间窗口已全屏化）
+  const anyModal = helpOpen || editors.length > 0 || notebookOpen;
+  const anyModalRef = useRef(false);
+  anyModalRef.current = anyModal;
 
   // ---------- 显示 / 隐藏状态机 ----------
   const revealedRef = useRef(false);
@@ -110,7 +203,15 @@ export default function App() {
   const scheduleHide = useCallback(() => {
     window.clearTimeout(hideTimer.current);
     if (!revealedRef.current) return;
-    if (hoverRef.current || dragActiveRef.current || dragHoverRef.current || menuRef.current || helpOpenRef.current) return;
+    if (
+      hoverRef.current ||
+      dragActiveRef.current ||
+      dragHoverRef.current ||
+      menuRef.current ||
+      helpOpenRef.current ||
+      anyModalRef.current
+    )
+      return;
     hideTimer.current = window.setTimeout(hideNow, HIDE_DELAY);
   }, [hideNow]);
 
@@ -160,13 +261,33 @@ export default function App() {
         ) {
           setSize(st.size);
         }
+        // 便笺先于卡片载入：便笺卡片要用便笺正文渲染
+        const loaded: Note[] = Array.isArray(st.notes)
+          ? st.notes.map((n) => ({
+              id: n.id,
+              text: n.text ?? "",
+              updatedAt: n.updatedAt ?? 0,
+              pinned: !!n.pinned,
+            }))
+          : [];
+        setNotes(loaded);
+        notesRef.current = loaded;
         if (Array.isArray(st.items)) {
           for (const it of st.items) {
-            await addItem(it.path, it.source === "drag" ? "drag" : "clip");
+            // 兼容两种落盘形态：便笺卡片只有 noteId，文件卡片有 path
+            const it0 = it as { path?: string; source?: string; noteId?: string };
+            if (it0.noteId) {
+              const n = loaded.find((x) => x.id === it0.noteId);
+              addNoteCard(it0.noteId, n?.text ?? "");
+            } else if (typeof it0.path === "string" && it0.path) {
+              await addItem(it0.path, it0.source === "drag" ? "drag" : "clip");
+            }
           }
         }
       } catch (e) {
         console.error(e);
+      } finally {
+        loadedRef.current = true;
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,6 +321,16 @@ export default function App() {
     });
     // macOS 未授权：提示开启精细点击穿透（点击/拖动微信等下方窗口不再被遮挡）
     const un9 = listen("mac-tap-denied", () => setMacDenied(true));
+    // 托盘菜单「新增便笺」：新建便笺（挂卡片 + 编辑窗），绳子未唤出则先唤出
+    const un10 = listen("tray-new-note", () => {
+      createNote();
+    });
+    // 托盘菜单「打开笔记本」：唤出绳子并打开便笺管理器
+    const un11 = listen("tray-open-notebook", () => {
+      reveal();
+      bringToFront(NOTEBOOK_KEY);
+      setNotebookOpen(true);
+    });
     // 鼠标进入 / 离开面板区域（驱动闲置隐藏）
     const un6 = listen<boolean>("panel-hover", (e) => {
       hoverRef.current = !!e.payload;
@@ -314,6 +445,8 @@ export default function App() {
       un7.then((f) => f());
       un8.then((f) => f());
       un9.then((f) => f());
+      un10.then((f) => f());
+      un11.then((f) => f());
       window.removeEventListener("card-drag-start", onDragStart);
       window.removeEventListener("card-drag-end", onDragEnd);
       window.removeEventListener("resize", onResize);
@@ -325,6 +458,33 @@ export default function App() {
   }, []);
 
   // ---------- 增删 ----------
+  /** 把便笺挂到绳子上（笔记本里可重复挂起，同一便笺可有多张卡片） */
+  const addNoteCard = useCallback((noteId: string, text: string) => {
+    const item: Item = {
+      id: nextId(),
+      path: "",
+      name: "便笺",
+      kind: "note",
+      tilt: (Math.random() * 2 - 1) * 2.5,
+      index: seq,
+      source: "clip",
+      noteId,
+      text,
+    };
+    setItems((prev) => [...prev, item]);
+    // 新卡片进绳：回到最右端（最新）
+    setScrollPx(0);
+    return item;
+  }, []);
+
+  /** 新建便笺（返回 id，便于笔记本立即选中） */
+  const newNote = useCallback(() => {
+    const note: Note = { id: nextNoteId(), text: "", updatedAt: Date.now() };
+    setNotes((prev) => [note, ...prev]);
+    notesRef.current = [note, ...notesRef.current];
+    return note.id;
+  }, []);
+
   const addItem = useCallback(async (path: string, source: "drag" | "clip") => {
     if (itemsRef.current.some((it) => it.path === path)) return;
     const name = path.split(/[\\/]/).pop() || path;
@@ -361,14 +521,7 @@ export default function App() {
     [addItem],
   );
 
-  // 持久化（items 或样式变化时）
-  useEffect(() => {
-    api
-      .saveState(items.map((i) => ({ path: i.path, source: i.source })))
-      .catch(console.error);
-  }, [items]);
-
-  // ---------- 菜单 ----------
+  // ---------- 取下卡片（掉落动画） ----------
   const [fallingIds, setFallingIds] = useState<string[]>([]);
 
   // 掉落动画结束后真正移除
@@ -382,6 +535,168 @@ export default function App() {
     }, 680);
   }, []);
 
+  // ---------- 便笺 ----------
+  /** 打开便笺编辑窗：同一便笺已开着就只置顶，不重复开窗 */
+  const openNoteEditor = useCallback(
+    (noteId: string, cardId: string, text: string, creating: boolean) => {
+      cancelHide();
+      bringToFront(editorKey(noteId));
+      setEditors((prev) =>
+        prev.some((e) => e.noteId === noteId)
+          ? prev
+          : [...prev, { noteId, cardId, text, creating }]
+      );
+    },
+    [bringToFront, cancelHide]
+  );
+
+  /** 新建便笺：先在笔记本里建一条，再挂一张卡片到绳上，同时弹出编辑窗 */
+  const createNote = useCallback(() => {
+    cancelHide();
+    const id = newNote();
+    const item = addNoteCard(id, "");
+    reveal();
+    openNoteEditor(id, item.id, "", true);
+    return id;
+  }, [addNoteCard, cancelHide, newNote, openNoteEditor, reveal]);
+
+  /** 双击便笺卡片 / 菜单「编辑便笺」：打开编辑窗 */
+  const editNoteCard = useCallback(
+    (item: Item) => {
+      if (!item.noteId) return;
+      openNoteEditor(item.noteId, item.id, item.text ?? "", false);
+    },
+    [openNoteEditor]
+  );
+
+  /** 打勾：正文写回便笺与绳上所有引用它的卡片 */
+  const submitNote = useCallback(
+    (noteId: string, text: string) => {
+      const ed = editorsRef.current.find((e) => e.noteId === noteId);
+      setEditors((prev) => prev.filter((e) => e.noteId !== noteId));
+      if (!ed) return;
+      if (!text.trim() && ed.creating) {
+        // 新建却没写内容：连卡片带便笺一起丢弃，不留垃圾
+        removeItems([ed.cardId]);
+        setNotes((prev) => prev.filter((n) => n.id !== ed.noteId));
+        return;
+      }
+      setNotes((prev) =>
+        prev.map((n) =>
+          n.id === ed.noteId ? { ...n, text, updatedAt: Date.now() } : n
+        )
+      );
+      setItems((prev) =>
+        prev.map((i) => (i.noteId === ed.noteId ? { ...i, text } : i))
+      );
+    },
+    [removeItems]
+  );
+
+  /** 关闭编辑窗：新建且一个字没写 → 连卡片带便笺丢弃，不留空壳 */
+  const closeEditor = useCallback(
+    (noteId: string, text: string) => {
+      const ed = editorsRef.current.find((e) => e.noteId === noteId);
+      setEditors((prev) => prev.filter((e) => e.noteId !== noteId));
+      if (ed?.creating && !text.trim()) {
+        removeItems([ed.cardId]);
+        setNotes((prev) => prev.filter((n) => n.id !== ed.noteId));
+      }
+    },
+    [removeItems]
+  );
+
+  /** 笔记本右侧直接编辑：实时写回便笺与绳上卡片 */
+  const editNoteText = useCallback((noteId: string, text: string) => {
+    setNotes((prev) => prev.map((n) => (n.id === noteId ? { ...n, text } : n)));
+    setItems((prev) =>
+      prev.map((i) => (i.noteId === noteId ? { ...i, text } : i))
+    );
+  }, []);
+
+  /** 编辑结束（失焦）：刷新修改时间 */
+  const touchNote = useCallback((noteId: string) => {
+    setNotes((prev) =>
+      prev.map((n) =>
+        n.id === noteId ? { ...n, updatedAt: Date.now() } : n
+      )
+    );
+  }, []);
+
+  /** 置顶 / 取消置顶 */
+  const togglePin = useCallback((noteId: string) => {
+    setNotes((prev) =>
+      prev.map((n) => (n.id === noteId ? { ...n, pinned: !n.pinned } : n))
+    );
+  }, []);
+
+  /** 笔记本里拖拽排序：把该便笺插到展示顺序的第 index 位（只允许在同组内移动） */
+  const reorderNote = useCallback((noteId: string, target: number) => {
+    setNotes((prev) => {
+      const ordered = [...prev].sort((a, b) =>
+        !!a.pinned !== !!b.pinned ? (a.pinned ? -1 : 1) : 0
+      );
+      const from = ordered.findIndex((n) => n.id === noteId);
+      if (from < 0) return prev;
+      const moved = ordered[from];
+      const pinnedCount = ordered.filter((n) => n.pinned).length;
+      // 置顶组占 [0, pinnedCount)，普通组占 [pinnedCount, len)
+      const lo = moved.pinned ? 0 : pinnedCount;
+      const hi = moved.pinned ? pinnedCount : ordered.length;
+      const to = Math.max(lo, Math.min(hi, target));
+      if (to === from || to === from + 1) return prev;
+      const next = ordered.slice();
+      next.splice(from, 1);
+      next.splice(to > from ? to - 1 : to, 0, moved);
+      return next;
+    });
+  }, []);
+
+  /** 笔记本 → 挂起（支持重复挂起） */
+  const hangNote = useCallback(
+    (noteId: string) => {
+      const n = notesRef.current.find((x) => x.id === noteId);
+      if (!n) return;
+      addNoteCard(noteId, n.text);
+      reveal();
+      showToast("已挂到绳子上");
+    },
+    [addNoteCard, reveal, showToast]
+  );
+
+  /** 笔记本 → 删除（二次确认：绳上卡片一起删） */
+  const deleteNote = useCallback(
+    async (noteId: string) => {
+      const ok = await confirm(
+        "删除后，绳子上挂着的该便笺卡片也会一起删除。是否继续？",
+        { title: "删除便笺", kind: "warning" }
+      );
+      if (!ok) return;
+      const ids = itemsRef.current
+        .filter((i) => i.noteId === noteId)
+        .map((i) => i.id);
+      if (ids.length > 0) removeItems(ids);
+      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+    },
+    [removeItems]
+  );
+
+  // 持久化（卡片 / 便笺变化时）。初始状态读完前不回写，避免空数据覆盖磁盘。
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    api
+      .saveState(
+        items.map((i) =>
+          i.kind === "note" && i.noteId
+            ? { noteId: i.noteId }
+            : { path: i.path, source: i.source }
+        ),
+        notes
+      )
+      .catch(console.error);
+  }, [items, notes]);
+
+  // ---------- 菜单 ----------
   const openCardMenu = (e: React.MouseEvent, item: Item) => {
     e.preventDefault();
     e.stopPropagation();
@@ -389,23 +704,36 @@ export default function App() {
     const idx = items.findIndex((i) => i.id === item.id);
     const leftIds = items.slice(0, idx).map((i) => i.id);
     const rightIds = items.slice(idx + 1).map((i) => i.id);
+    const isNote = item.kind === "note";
     setMenu({
       x: e.clientX,
       y: e.clientY,
       items: [
-        {
-          label: "打开（双击）",
-          onClick: () => api.openPath(item.path).catch(console.error),
-        },
-        // 仅拖拽进入的文件展示（剪贴板落地的是临时文件，定位无意义）
-        ...(item.source === "drag"
+        // 便笺卡片：没有文件可打开，首项换成编辑
+        ...(isNote
           ? [
               {
-                label: "打开所在文件夹",
-                onClick: () => api.showInFolder(item.path).catch(console.error),
+                label: "编辑便笺（双击）",
+                bold: true,
+                onClick: () => editNoteCard(item),
               },
             ]
-          : []),
+          : [
+              {
+                label: "打开（双击）",
+                onClick: () => api.openPath(item.path).catch(console.error),
+              },
+              // 仅拖拽进入的文件展示（剪贴板落地的是临时文件，定位无意义）
+              ...(item.source === "drag"
+                ? [
+                    {
+                      label: "打开所在文件夹",
+                      onClick: () =>
+                        api.showInFolder(item.path).catch(console.error),
+                    },
+                  ]
+                : []),
+            ]),
         {
           label: "取下",
           onClick: () => removeItems([item.id]),
@@ -445,9 +773,17 @@ export default function App() {
             });
             if (typeof folder !== "string" || !folder) return;
             try {
+              // 便笺卡片另存为 txt：文件名 = 正文前 10 字 + 序号
+              const noteFiles: NoteFile[] = items
+                .filter((i) => i.kind === "note")
+                .map((i, idx) => ({
+                  name: noteFileName(i.text ?? "", idx + 1),
+                  text: i.text ?? "",
+                }));
               const saved = await api.saveToFolder(
-                items.map((i) => i.path),
+                items.filter((i) => i.kind !== "note").map((i) => i.path),
                 folder,
+                noteFiles,
               );
               removeItems(items.map((i) => i.id));
               showToast(`已另存到：${saved}`);
@@ -468,40 +804,67 @@ export default function App() {
   };
 
   // 右键菜单打开期间：强制窗口可交互（防止穿透吞掉菜单点击）；菜单条目数动态，
-  // 可能超出条带窗口底部 → 临时加高透明窗口容纳，关闭后恢复条带高度
+  // 可能超出条带窗口底部 → 临时加高透明窗口容纳，关闭后恢复条带高度。
+  // ⚠️ 连续右键（旧菜单还开着就右键另一处）会在同一次提交里「关旧菜单 + 开新菜单」：
+  // 此时既不能真的去恢复条带高度（异步 IPC，会和随后的加高互相覆盖），
+  // 也不能用 window.innerHeight 判断是否需要加高（它还是上一次加高后的高度，
+  // 会误判成「够高」而不再加高）→ 窗口最终停在条带高度，菜单下半截被裁掉。
   useEffect(() => {
     invoke("set_capture_override", { on: !!menu }).catch(() => {});
+    // 只要又开了菜单就取消上一次预约的恢复（同一次提交里必然走到这里）
+    window.clearTimeout(menuRestoreTimer.current);
     if (menu) {
       cancelHide();
       // 弹窗打开时窗口已全屏化，无需再加高
-      if (!helpFullRef.current) {
-        const need = menu.y + menu.items.length * 34 + 72;
-        if (need > window.innerHeight) {
-          menuExpandedRef.current = true;
-          getCurrentWindow()
-            .setSize(new LogicalSize(window.innerWidth, Math.ceil(need)))
-            .catch(console.error);
+      if (!modalFullRef.current) {
+        // 基准是条带高度，不是 window.innerHeight
+        const base = panelHeight(size);
+        const need = Math.ceil(menu.y + menu.items.length * 34 + 72);
+        const target = Math.max(base, need);
+        const cur = menuHRef.current || base;
+        // 上一次恢复（缩回条带）的 IPC 可能还在路上：排在它后面再下发加高，
+        // 否则两个异步窗口操作顺序不定，菜单可能被恢复动作截掉
+        const pending = menuRestoreP.current;
+        if (target !== cur || pending) {
+          menuHRef.current = target > base ? target : 0;
+          menuExpandedRef.current = target > base;
+          menuRestoreP.current = null;
+          const apply = () =>
+            getCurrentWindow()
+              .setSize(new LogicalSize(window.innerWidth, target))
+              .catch(console.error);
+          if (pending) pending.then(apply);
+          else apply();
         }
       }
     } else {
-      if (menuExpandedRef.current) {
+      // 延后一拍再恢复：连续右键时上面的分支会把这次恢复取消掉，窗口不会
+      // 先缩回条带再被撑高（也不会被这个恢复动作截掉刚打开的菜单）
+      menuRestoreTimer.current = window.setTimeout(() => {
+        if (menuRef.current) return; // 期间又开了新菜单，交给菜单分支处理
+        if (!menuHRef.current) return; // 本来就没加高过
+        menuHRef.current = 0;
         menuExpandedRef.current = false;
         // 弹窗仍开着则保持全屏，恢复留给弹窗关闭时处理
-        if (!helpFullRef.current) {
-          invoke("window_resized").catch(console.error);
+        if (!modalFullRef.current) {
+          const p = invoke("window_resized").catch(console.error);
+          menuRestoreP.current = p;
+          p.then(() => {
+            if (menuRestoreP.current === p) menuRestoreP.current = null;
+          });
         }
-      }
+      }, 0);
       scheduleHide();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menu]);
 
-  // 使用说明弹窗：打开时窗口临时全屏化，弹窗即可拖到屏幕任意位置；
-  // 关闭后恢复条带窗口（重新铺满顶部）
+  // 弹窗（使用说明 / 便笺 / 笔记本）：打开时窗口临时全屏化，弹窗即可拖到
+  // 屏幕任意位置；全部关闭后恢复条带窗口（重新铺满顶部）
   useEffect(() => {
-    if (helpOpen) {
+    if (anyModal) {
       cancelHide();
-      helpFullRef.current = true;
+      modalFullRef.current = true;
       (async () => {
         const mon = await currentMonitor();
         const win = getCurrentWindow();
@@ -510,37 +873,71 @@ export default function App() {
           await win.setSize(mon.size);
         }
       })().catch(console.error);
+      // 弹窗里有输入框：把窗口带到前台，键盘才能落进来
+      getCurrentWindow().setFocus().catch(() => {});
+      if (IS_MAC) api.activateApp().catch(() => {});
     } else {
-      if (helpFullRef.current) {
-        helpFullRef.current = false;
+      if (modalFullRef.current) {
+        modalFullRef.current = false;
         setHelpRect(null);
+        setDlgRects({});
+        // 窗口回到条带高度，菜单加高的记录同步作废（否则再次右键会以为还加高着）
+        menuHRef.current = 0;
+        menuExpandedRef.current = false;
         invoke("window_resized").catch(console.error);
       }
       scheduleHide();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [helpOpen]);
+  }, [anyModal]);
 
   // ---------- 布局（滚轮像素级回看，scrollPx=0 时最新卡片靠右） ----------
-  const capacity = visibleCapacity(width, size);
-  const visCount = Math.min(items.length, capacity);
-  const maxScroll = Math.max(0, items.length - visCount);
+  // 入口卡片常驻绳尾：与普通卡片共用同一套布局（可见数 / 滚动 / 折叠堆叠）
+  const allItems = [...items, entryItem];
+  const capacity = visibleCapacity(
+    allItems.map((it) => it.kind),
+    width,
+    size
+  );
+  const visCount = Math.min(allItems.length, capacity);
+  const maxScroll = Math.max(0, allItems.length - visCount);
   const sp = spacing(size);
   const maxScrollPx = maxScroll * sp;
   // 删卡片后 clamp；sc 为浮点"卡单位"，startFloat 连续移动可见窗口
   const sc = Math.min(scrollPx, maxScrollPx) / sp;
   const startFloat = maxScroll - sc;
   const start = Math.floor(startFloat);
-  // 子格偏移：所有可见卡整体左移 frac 格；凑满一格时窗口切换，
-  // 新卡才从折叠区挂进来（徽章数量与折叠同步变化）
-  const shiftPx = (startFloat - start) * sp;
-  const visibleItems = items
+  // 子格偏移：所有可见卡整体左移 frac 个「左侧边界节距」；凑满一格时窗口切换，
+  // 新卡才从折叠区挂进来（徽章数量与折叠同步变化）。
+  // 节距取「即将从左侧挂入的卡片 → 当前首卡」的真实中心距：便笺 / 入口卡更宽，
+  // 平移距离必须按它算，否则整数格切换时整行会跳几 px
+  const pitchIn =
+    start > 0
+      ? pitchBetween(allItems[start - 1].kind, allItems[start].kind, size)
+      : sp;
+  const shiftPx = (startFloat - start) * pitchIn;
+  const visibleItems = allItems
     .slice(start, start + visCount)
-    .map((it, i) => ({ item: it, i }));  const folded = items.slice(0, start);
-  const foldedRight = items.slice(start + visCount);
+    .map((it, i) => ({ item: it, i }));
+  // 可见卡片中心 x：按各自实际宽度铺开（相邻边缘间隙一致），整体居中。
+  // 命中区 / 渲染 / 重排映射共用这一份，保证三处永远对齐
+  const centers = visibleCenters(
+    visibleItems.map((v) => v.item.kind),
+    width,
+    size
+  );
+  const folded = allItems.slice(0, start);
+  const foldedRight = allItems.slice(start + visCount);
+  // 含绳尾入口卡片的全量列表（重排的槽位映射用；items 本身不含入口卡片）
+  const allItemsRef = useRef<Item[]>([]);
+  allItemsRef.current = allItems;
+  // 入口卡片 z 序：恰好压在当前卡片之上，同时留在卡片层级带内——
+  // 重排中的卡片（300）/ 掉落动画（+200）仍能盖住它，弹窗（1200+）、
+  // 右键菜单（1000）、toast（900）也照常盖在卡片之上
+  const entryZ = 10 + items.reduce((m, it) => Math.max(m, it.index), 0) + 1;
   // 夹子拖拽重排用的最新布局参数（window 监听 handler 通过 ref 读取）
-  const reorderLayoutRef = useRef({ sp, start, visCount, width, shiftPx });
-  reorderLayoutRef.current = { sp, start, visCount, width, shiftPx };
+  const reorderLayoutRef = useRef({ centers, start, visCount, shiftPx });
+  reorderLayoutRef.current = { centers, start, visCount, shiftPx };
   const halfSpan = ((visCount - 1) / 2) * spacing(size);
   // 左右折叠堆叠与可见区对称摆放（各留一格间距），
   // 并 clamp 到距屏幕边界 ≥ 20px（窄屏 / 半屏时不再贴边出屏）
@@ -554,6 +951,35 @@ export default function App() {
     width / 2 + halfSpan + spacing(size) + 10
   );
   const panelH = panelHeight(size);
+
+  // 入口点击：吃掉这一次点击（不穿透到下方窗口），并保持绳子不收起
+  const stopEntryClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelHide();
+    },
+    [cancelHide]
+  );
+
+  // 入口卡片左图（便笺）：新建便笺 —— 挂一张卡片 + 弹出编辑窗
+  const onNoteEntryClick = useCallback(
+    (e: React.MouseEvent) => {
+      stopEntryClick(e);
+      createNote();
+    },
+    [createNote, stopEntryClick]
+  );
+
+  // 入口卡片右图（笔记本）：打开便笺管理器
+  const onNotebookEntryClick = useCallback(
+    (e: React.MouseEvent) => {
+      stopEntryClick(e);
+      bringToFront(NOTEBOOK_KEY);
+      setNotebookOpen(true);
+    },
+    [bringToFront, stopEntryClick]
+  );
 
   // ---------- 滚轮：像素级平滑回看（凑满一格卡片才从折叠区出来） ----------
   // 卡片上滚动（WebView 原生 wheel）与条带空白区滚动（panel-wheel 转发）共用
@@ -591,11 +1017,15 @@ export default function App() {
 
   // ---------- 夹子拖拽重排（沿绳左右换位） ----------
   const startReorder = useCallback((e: React.PointerEvent, item: Item) => {
+    // 标记重排会话：卡片自身的「拖出为文件/文字」逻辑看到此标记即让路，
+    // 否则重排中指针掠过其它卡片会把它们误发起原生拖拽（拖影变成别人的图）
+    setReordering(true);
     setReorder({ id: item.id, mx: e.clientX });
     window.dispatchEvent(new CustomEvent("card-drag-start"));
   }, []);
 
   const endReorder = useCallback(() => {
+    setReordering(false);
     if (!reorderRef.current) return;
     setReorder(null);
     window.dispatchEvent(new CustomEvent("card-drag-end"));
@@ -605,12 +1035,22 @@ export default function App() {
     const ro = reorderRef.current;
     if (!ro) return;
     const L = reorderLayoutRef.current;
-    const count = Math.min(itemsRef.current.length, L.visCount);
+    // 可见槽位含绳尾入口卡片；它不参与重排——映射到它的槽位时
+    // target 会越界（见下方 setItems 里的兜底），卡片排到它左侧即止
+    const count = Math.min(allItemsRef.current.length, L.visCount);
     if (count > 0) {
-      // 由鼠标 x 反解悬停的可见槽位，实时把被拖卡片移到该位置（其余卡片 CSS 过渡腾位）
-      const hoverI = Math.round(
-        (mx - L.width / 2 + L.shiftPx) / L.sp + (count - 1) / 2,
-      );
+      // 由鼠标 x 反解悬停的可见槽位：取中心离鼠标最近的槽位。
+      // 各卡宽度不同（便笺 / 入口更宽），不能用等距公式反解
+      const fx = mx + L.shiftPx; // 还原到未整体平移的槽位坐标
+      let hoverI = 0;
+      let best = Infinity;
+      for (let j = 0; j < count; j++) {
+        const d = Math.abs(L.centers[j] - fx);
+        if (d < best) {
+          best = d;
+          hoverI = j;
+        }
+      }
       const clamped = Math.max(0, Math.min(count - 1, hoverI));
       const target = L.start + clamped;
       setItems((prev) => {
@@ -661,10 +1101,29 @@ export default function App() {
       const cardW = cw * DOCK_MAX + 16;
       // +NAME_SECOND_LINE：文件名两行后的卡片下半部分也要能点到
       const cardH = (26 + ph + 18 + NAME_SECOND_LINE) * DOCK_MAX + 14;
+      // 便笺卡片更大，Dock 放大上限仅 WIDE_DOCK_MAX（1.06）：四周留的
+      // 16 / 36px 余量足以覆盖放大外扩，按实际尺寸 + 余量算命中区
+      const noteW = noteCardWidth(size) * WIDE_DOCK_MAX + 16;
+      const noteH = 26 + noteCardHeight(size) * WIDE_DOCK_MAX + 36;
+      // 入口卡片：与便笺卡片同宽、同口径算命中区
+      const entryW = entryCardWidth(size) * WIDE_DOCK_MAX + 16;
+      const entryH = 26 + entryCardHeight(size) * WIDE_DOCK_MAX + 36;
       for (const v of visibleItems) {
-        const cx = visibleX(v.i, visCount, width, size) - shiftPx;
+        const cx = centers[v.i] - shiftPx;
         const y = ropeY(cx, width) - PIN_ABOVE;
-        rects.push([cx - cardW / 2, y - 4, cardW, cardH]);
+        const w =
+          v.item.kind === "note"
+            ? noteW
+            : v.item.kind === "entry"
+              ? entryW
+              : cardW;
+        const h =
+          v.item.kind === "note"
+            ? noteH
+            : v.item.kind === "entry"
+              ? entryH
+              : cardH;
+        rects.push([cx - w / 2, y - 4, w, h]);
       }
       if (folded.length > 0) {
         rects.push([fanX - (cw + 16) / 2, 14, cw + 16, ph + 70]);
@@ -672,26 +1131,25 @@ export default function App() {
       if (foldedRight.length > 0) {
         rects.push([fanXRight - (cw + 16) / 2, 14, cw + 16, ph + 70]);
       }
-      if (items.length === 0) {
-        // 空绳装饰：中间夹着的小图
-        const cx = width / 2;
-        const py = ropeY(cx, width) - PIN_ABOVE;
-        rects.push([cx - 55, py - 4, 110, 100]);
-      }
     }
-    if (helpRect) {
-      // 弹窗打开：窗口已全屏化（逻辑坐标=屏幕坐标），弹窗矩形（留 16px
-      // hover 余量）与卡片命中区合并上报，阅读说明期间卡片仍可点击 /
-      // 悬停放大 / 滚轮回看 / 拖入挂绳，其余区域照常穿透
-      rects.unshift([
-        helpRect.x - 16,
-        helpRect.y - 16,
-        helpRect.w + 32,
-        helpRect.h + 32,
-      ]);
+    // 弹窗打开：窗口已全屏化（逻辑坐标=屏幕坐标），弹窗矩形（留 16px
+    // hover 余量）与卡片命中区合并上报，弹窗期间卡片仍可点击 /
+    // 悬停放大 / 滚轮回看 / 拖入挂绳，其余区域照常穿透
+    for (const r of [...Object.values(dlgRects), helpRect]) {
+      if (!r) continue;
+      rects.unshift([r.x - 16, r.y - 16, r.w + 32, r.h + 32]);
     }
     api.setHitRects(rects, panelH, maxScroll > 0).catch(console.error);
-  }, [items, width, size, revealed, menu, scrollPx, helpRect]);
+  }, [
+    items,
+    width,
+    size,
+    revealed,
+    menu,
+    scrollPx,
+    helpRect,
+    dlgRects,
+  ]);
 
   // ---------- Dock 放大联动（macOS Dock 风格） ----------
   // Rust 鼠标钩子转发条带内光标位置（卡片间隙穿透，WebView 自身收不到 move），
@@ -703,8 +1161,15 @@ export default function App() {
     for (const s of slotsRef.current) {
       const d = mx == null ? Infinity : Math.abs(s.x - mx);
       // 超出影响范围清除变量（回落到 CSS 默认值 1，transition 平滑缩回）
-      if (d >= range) s.el.style.removeProperty("--dock");
-      else s.el.style.setProperty("--dock", dockScale(d, sp).toFixed(4));
+      if (d >= range) {
+        s.el.style.removeProperty("--dock");
+        s.el.style.removeProperty("--dock-wide");
+      } else {
+        // 普通卡 1.2 倍；便笺 / 入口卡（更宽）走压低的上限，避免压到邻居。
+        // 两个变量都写，由 CSS 按卡片类型各取所需（--dock-wide 仅宽卡读取）
+        s.el.style.setProperty("--dock", dockScale(d, sp).toFixed(4));
+        s.el.style.setProperty("--dock-wide", wideDockScale(d, sp).toFixed(4));
+      }
     }
   }, [size]);
 
@@ -751,38 +1216,46 @@ export default function App() {
       }}
     >
       <Rope width={width} active={dragHover} />
-      {items.length === 0 && (
-        <div
-          className="empty-peg"
-          style={{ left: width / 2, top: ropeY(width / 2, width) - PIN_ABOVE }}
-        >
-          <Clothespin />
-          <img
-            className="empty-dog"
-            src="/perch-dog.png"
-            alt=""
-            draggable={false}
-            style={{ width: Math.round(cardWidth(size) * 0.4) }}
-          />
-        </div>
-      )}
       <OverflowFan items={folded} x={fanX} size={size} />
       <OverflowFan items={foldedRight} x={fanXRight} size={size} />
       {visibleItems.map(({ item, i }) => {
         const isReorder = item.id === reorder?.id;
-        const slotX = visibleX(i, visCount, width, size) - shiftPx;
+        const slotX = centers[i] - shiftPx;
         // 被拖卡片直接跟随鼠标（钳制在首末槽位之间，其余卡片已实时重排腾位）
         const x =
           isReorder && reorder
             ? Math.max(
-                visibleX(0, visCount, width, size) - shiftPx,
-                Math.min(
-                  visibleX(visCount - 1, visCount, width, size) - shiftPx,
-                  reorder.mx,
-                ),
+                centers[0] - shiftPx,
+                Math.min(centers[centers.length - 1] - shiftPx, reorder.mx),
               )
             : slotX;
-        return (
+        // 便笺管理入口卡片：常驻绳尾，只响应点击（无右键 / 拖动 / 取下）
+        return item.kind === "entry" ? (
+          <EntryCard
+            key={item.id}
+            width={width}
+            size={size}
+            x={x}
+            tilt={item.tilt}
+            zIndex={entryZ}
+            onNote={onNoteEntryClick}
+            onNotebook={onNotebookEntryClick}
+          />
+        ) : item.kind === "note" ? (
+          <NoteCard
+            key={item.id}
+            item={item}
+            width={width}
+            size={size}
+            x={x}
+            reorder={isReorder}
+            onPinDown={startReorder}
+            onEdit={editNoteCard}
+            onContextMenu={openCardMenu}
+            onRemove={(id) => removeItems([id])}
+            falling={fallingIds.includes(item.id)}
+          />
+        ) : (
           <PeggedCard
             key={item.id}
             item={item}
@@ -798,6 +1271,33 @@ export default function App() {
         );
       })}
       <ContextMenu menu={menu} onClose={() => setMenu(null)} />
+      {editors.map((ed) => (
+        <NoteEditor
+          key={ed.noteId}
+          initial={ed.text}
+          onRect={editorRectFor(ed.noteId)}
+          onSubmit={(t) => submitNote(ed.noteId, t)}
+          onClose={(t) => closeEditor(ed.noteId, t)}
+          z={zMap[editorKey(ed.noteId)] ?? 0}
+          onFocus={() => bringToFront(editorKey(ed.noteId))}
+        />
+      ))}
+      {notebookOpen && (
+        <Notebook
+          notes={notes}
+          onRect={notebookRect}
+          onCreate={createNote}
+          onHang={hangNote}
+          onTogglePin={togglePin}
+          onReorder={reorderNote}
+          onDelete={deleteNote}
+          onEdit={editNoteText}
+          onEditEnd={touchNote}
+          z={zMap[NOTEBOOK_KEY] ?? 0}
+          onFocus={() => bringToFront(NOTEBOOK_KEY)}
+          onClose={() => setNotebookOpen(false)}
+        />
+      )}
       {helpOpen && (
         <HelpDialog
           onRect={setHelpRect}

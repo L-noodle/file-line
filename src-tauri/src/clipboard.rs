@@ -51,7 +51,7 @@ mod imp {
         IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
     };
     use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-    use windows::Win32::System::Ole::{CF_DIB, CF_DIBV5, CF_HDROP};
+    use windows::Win32::System::Ole::{CF_DIB, CF_DIBV5, CF_HDROP, CF_UNICODETEXT};
     use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
     pub fn start_watcher(app: AppHandle) {
@@ -189,6 +189,29 @@ mod imp {
                             }
                         }
                     }
+                }
+                Ok(())
+            })();
+            let _ = CloseClipboard();
+            r?;
+            SELF_SEQ.store(GetClipboardSequenceNumber(), Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// 便笺单击复制：写入纯文本（CF_UNICODETEXT）。
+    pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
+        unsafe {
+            if OpenClipboard(None).is_err() {
+                return Err("无法打开剪贴板".into());
+            }
+            let r = (|| -> Result<(), String> {
+                EmptyClipboard().map_err(|e| e.to_string())?;
+                let mut wide: Vec<u16> = text.encode_utf16().collect();
+                wide.push(0);
+                let bytes: Vec<u8> = wide.iter().flat_map(|u| u.to_le_bytes()).collect();
+                if let Some(h) = alloc_hglobal(&bytes) {
+                    let _ = SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(h.0)));
                 }
                 Ok(())
             })();
@@ -375,6 +398,7 @@ mod imp {
     const FILENAMES_TYPE: &str = "NSFilenamesPboardType";
     const PNG_TYPE: &str = "public.png";
     const TIFF_TYPE: &str = "public.tiff";
+    const TEXT_TYPE: &str = "public.utf8-plain-text";
 
     fn ns_string(s: &str) -> *mut Object {
         let c = CString::new(s).unwrap_or_default();
@@ -514,7 +538,24 @@ mod imp {
             Ok(())
         }
     }
+
+    /// 便笺单击复制：写入纯文本。
+    pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
+        unsafe {
+            let board = pb();
+            let _: isize = msg_send![board, clearContents];
+            let ty = ns_string(TEXT_TYPE);
+            let types_arr: *mut Object = msg_send![class!(NSArray), arrayWithObject: ty];
+            let _: isize =
+                msg_send![board, declareTypes: types_arr owner: std::ptr::null::<Object>()];
+            let s = ns_string(text);
+            let _: () = msg_send![board, setString: s forType: ty];
+            SELF_SEQ.store(change_count() as u32, Ordering::SeqCst);
+            Ok(())
+        }
+    }
 }
 
 pub use imp::copy_file_to_clipboard;
+pub use imp::copy_text_to_clipboard;
 pub use imp::start_watcher;

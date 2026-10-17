@@ -23,6 +23,8 @@ image = "0.25"
 chrono = "0.4"
 
 [target."cfg(windows)".dependencies]
+# filedrop / textdrag 里的 #[implement(...)] 宏展开引用 windows_core 路径，
+# 必须是直接依赖才在 extern prelude 里
 windows-core = "0.61"
 windows = { version = "0.61", features = [
   "Win32_Foundation",

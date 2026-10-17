@@ -77,24 +77,6 @@ body,
   opacity: 1;
 }
 
-/* 空绳装饰：中间小夹子挂着的小图 */
-.empty-peg {
-  position: absolute;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  pointer-events: none;
-  z-index: 3;
-  animation: dropIn 0.5s cubic-bezier(0.3, 1.25, 0.45, 1) both;
-}
-.empty-dog {
-  margin-top: -5px;
-  object-fit: contain;
-  border-radius: 5px;
-  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.2));
-}
-
 /* ---------- 毛玻璃 ---------- */
 .glass,
 .glass-strong {
@@ -277,7 +259,8 @@ html[data-theme="dark"] .clothespin {
 }
 
 html[data-theme="dark"] .card {
-  background: rgba(38, 38, 42, 0.8);
+  background: rgba(38, 38, 42, 1);
+  border-color: #3f3f46; /* 暗色相框：白框改深灰 */
 }
 html[data-theme="dark"] .card::after {
   background: linear-gradient(
@@ -420,6 +403,14 @@ html[data-theme="dark"] .card-name {
 .card-x:hover {
   background: #f0f0f0;
 }
+html[data-theme="dark"] .card-x {
+  background: #3a3a41;
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #eee;
+}
+html[data-theme="dark"] .card-x:hover {
+  background: #4a4a52;
+}
 .card-x svg {
   stroke-width: 3;
 }
@@ -485,6 +476,11 @@ html[data-theme="dark"] .fan-card {
   background: rgba(38, 38, 42, 0.72);
   border-color: rgba(255, 255, 255, 0.13);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+/* 便笺预览：整卡高度 = 纸面（--fan-h，由 JS 按档位写入）+ 相框与内衬，
+   与绳上便笺卡一致；文字长短只影响裁剪，不再撑高 / 压矮卡片 */
+.fan-card.fan-card-note {
+  height: calc(var(--fan-h) + (var(--card-pad) + var(--card-frame)) * 2);
 }
 .fan-zone:hover .fan-card {
   box-shadow: var(--shadow-card-hover);
@@ -879,4 +875,748 @@ html[data-theme="dark"] .help-k {
 }
 html[data-theme="dark"] .help-v {
   color: #a6a6ae;
+}
+
+/* ---------- 便笺卡片（挂绳上，比普通卡片大一圈） ---------- */
+/* 卡面沿用 .card 的白边相框，正文区单独画成便签纸 */
+.note-card {
+  align-items: stretch;
+}
+html[data-theme="dark"] .note-card {
+  /* 卡面底板改实色：.card 暗色底只有 80% 不透明度，便笺纸周围那圈
+     相框会透出桌面（透明窗口），与弹窗底板同样处理 */
+  background: #2b2b30;
+}
+/* 便笺 / 入口卡片（比普通卡宽）：也参与 Dock 放大，但上限由前端写入的
+   --dock-wide 控制（≈1.06，见 layout.ts WIDE_DOCK_MAX）——幅度小到碰不到
+   邻居，又保证点击穿透态（窗口未占用）下也有移入反馈：CSS :hover 在穿透态
+   收不到鼠标事件，只有钩子转发的变量能驱动动画 */
+.note-slot .pegged-dock,
+.entry-slot .pegged-dock {
+  transform: scale(var(--dock-wide, 1));
+}
+.note-text {
+  position: relative;
+  width: 100%;
+  height: var(--note-h);
+  padding: 5px 7px;
+  border-radius: 8px;
+  background: linear-gradient(160deg, #fffbdc 0%, #ffee9e 100%);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.12);
+  color: #4a3f12;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+}
+/* 横线层：只画每行文字下方，顶部（第一行之上）留白不画线。
+   首行行盒底部在 padding-top 5 + 18 = 23px，线落在其上方 1px（22px 起），
+   故伪元素自 18px 开始（18 + 瓦片内偏移 4 = 22），之后每 18px 一条 */
+.note-text::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 18px;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(74, 63, 18, 0) 0 4px,
+    rgba(74, 63, 18, 0.16) 4px 5px,
+    rgba(74, 63, 18, 0) 5px 18px
+  );
+  pointer-events: none;
+}
+.note-text.empty {
+  color: #a2904a;
+}
+/* 深色下便签纸保持黄色（拟真，同 Apple 备忘录）：纸面 / 横线 / 文字
+   一律沿用上面的浅色值，不做暗化处理 */
+
+/* ---------- 便笺管理入口卡片（常驻绳尾，只响应点击） ---------- */
+/* 卡面内左右两张图：便笺 / 笔记本；放大上限同便笺卡片（见上方
+   .note-slot / .entry-slot 共用规则） */
+/* 木框：暖棕渐变 + 细密斜纹（木纤维），内衬相纸托住两张图 */
+.entry-card {
+  border: none;
+  padding: 8px;
+  border-radius: 14px;
+  background:
+    repeating-linear-gradient(
+      64deg,
+      rgba(255, 244, 224, 0.07) 0 2px,
+      rgba(84, 50, 22, 0.08) 2px 4px,
+      rgba(255, 244, 224, 0.04) 4px 7px
+    ),
+    linear-gradient(150deg, #d9ab73 0%, #b3824e 35%, #8f5f36 68%, #c4945f 100%);
+  box-shadow:
+    var(--shadow-card),
+    inset 0 1px 0 rgba(255, 240, 220, 0.5),
+    inset 0 -1px 1px rgba(70, 42, 18, 0.45),
+    inset 1px 0 0 rgba(255, 240, 220, 0.22),
+    inset -1px 0 0 rgba(70, 42, 18, 0.3);
+}
+.entry-imgs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px;
+  border-radius: 9px;
+  background: linear-gradient(145deg, #fdfdfe 55%, #eef1f8 100%);
+  box-shadow: inset 0 1px 2px rgba(96, 60, 26, 0.22);
+}
+.entry-img-btn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.entry-img-btn img {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  border-radius: 6px;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.2));
+  transition: transform 0.18s ease;
+}
+.entry-img-btn:hover img {
+  transform: scale(1.1);
+}
+/* 左图（竖版便笺 note.png，素材 191×217）：等比缩放后高度再矮 14px。
+   ⚠️ 更换便笺素材图时，需同步下面的高宽比 217 / 191 */
+.entry-img-btn:first-child img {
+  width: auto;
+  max-width: 100%;
+  /* 半宽 × 素材高宽比 = 自然高，再减 14px */
+  height: calc((var(--card-w) - 34px) / 2 * 217 / 191 - 14px);
+}
+/* 暗色：木色压深，相纸换深色衬底 */
+html[data-theme="dark"] .entry-card {
+  background:
+    repeating-linear-gradient(
+      64deg,
+      rgba(255, 244, 224, 0.05) 0 2px,
+      rgba(40, 22, 8, 0.1) 2px 4px,
+      rgba(255, 244, 224, 0.03) 4px 7px
+    ),
+    linear-gradient(150deg, #a97c4c 0%, #8a5f38 35%, #6e4726 68%, #9c6f42 100%);
+  box-shadow:
+    var(--shadow-card),
+    inset 0 1px 0 rgba(255, 240, 220, 0.28),
+    inset 0 -1px 1px rgba(30, 16, 6, 0.55),
+    inset 1px 0 0 rgba(255, 240, 220, 0.12),
+    inset -1px 0 0 rgba(30, 16, 6, 0.4);
+}
+html[data-theme="dark"] .entry-imgs {
+  background: linear-gradient(145deg, #3a3a41 55%, #2b2b30 100%);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+/* 木夹子：仅入口卡片使用（其它卡片保持玻璃夹） */
+.entry-slot .clothespin {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background:
+    repeating-linear-gradient(
+      78deg,
+      rgba(255, 240, 220, 0.09) 0 2px,
+      rgba(84, 50, 22, 0.09) 2px 4px
+    ),
+    linear-gradient(
+      100deg,
+      #d9ab73 0%,
+      #b9854e 32%,
+      #9c6b3c 55%,
+      #c79a63 78%,
+      #8f5f33 100%
+    );
+  border: 0.5px solid rgba(96, 58, 26, 0.55);
+  box-shadow:
+    inset 0 0.5px 0.5px rgba(255, 240, 214, 0.55),
+    inset 0.5px 0 1px rgba(255, 240, 214, 0.28),
+    inset -0.5px 0 1px rgba(70, 42, 18, 0.4),
+    inset 0 -1px 1.5px rgba(70, 42, 18, 0.35),
+    0 1.5px 3px rgba(0, 0, 0, 0.25),
+    0 3px 8px rgba(0, 0, 0, 0.12);
+}
+/* 斜向镜面高光条 → 暖色木纹高光 */
+.entry-slot .clothespin::before {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 243, 224, 0.8),
+    rgba(146, 98, 52, 0.25) 55%,
+    rgba(255, 243, 224, 0.4)
+  );
+}
+/* 顶部插槽：深棕木色 */
+.entry-slot .clothespin-slot {
+  background: rgba(74, 44, 18, 0.6);
+  box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.28);
+}
+/* 暗色：木色压深（特异性需高于 html[data-theme="dark"] .clothespin 的玻璃款） */
+html[data-theme="dark"] .entry-slot .clothespin {
+  background:
+    repeating-linear-gradient(
+      78deg,
+      rgba(255, 240, 220, 0.07) 0 2px,
+      rgba(40, 22, 8, 0.12) 2px 4px
+    ),
+    linear-gradient(
+      100deg,
+      #a97c4c 0%,
+      #8a5f38 32%,
+      #744c28 55%,
+      #9c6f42 78%,
+      #66401f 100%
+    );
+  border-color: rgba(40, 22, 8, 0.65);
+  box-shadow:
+    inset 0 0.5px 0.5px rgba(255, 240, 214, 0.32),
+    inset 0.5px 0 1px rgba(255, 240, 214, 0.16),
+    inset -0.5px 0 1px rgba(30, 16, 6, 0.5),
+    inset 0 -1px 1.5px rgba(30, 16, 6, 0.5),
+    0 1.5px 3px rgba(0, 0, 0, 0.4),
+    0 3px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* 折叠堆叠里的便笺预览 */
+.card-tile.note {
+  height: 100%;
+  max-height: none; /* 高度由 .fan-card-note 固定，不吃 .card-tile 的 0.62 上限 */
+  padding: 4px 3px;
+}
+.note-mini {
+  width: 100%;
+  flex: 1;
+  padding: 3px 5px;
+  border-radius: 6px;
+  background: linear-gradient(160deg, #fffbdc 0%, #ffee9e 100%);
+  color: #4a3f12;
+  font-size: 10px;
+  line-height: 1.35;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.note-mini.empty {
+  color: #a2904a;
+}
+/* 同 .note-text：深色下便签纸保持黄色，不暗化 */
+
+/* 折叠堆叠里的入口卡片预览（左右两张小图，木色衬底与绳上卡片一致） */
+.card-tile.entry {
+  height: 100%;
+  padding: 4px 3px;
+  border-radius: 10px;
+  background:
+    repeating-linear-gradient(
+      64deg,
+      rgba(255, 244, 224, 0.07) 0 2px,
+      rgba(84, 50, 22, 0.07) 2px 4px
+    ),
+    linear-gradient(150deg, #d9ab73 0%, #b3824e 45%, #8f5f36 100%);
+}
+html[data-theme="dark"] .card-tile.entry {
+  background:
+    repeating-linear-gradient(
+      64deg,
+      rgba(255, 244, 224, 0.05) 0 2px,
+      rgba(40, 22, 8, 0.1) 2px 4px
+    ),
+    linear-gradient(150deg, #a97c4c 0%, #8a5f38 45%, #6e4726 100%);
+}
+.entry-mini {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+.entry-mini img {
+  height: 100%;
+  width: auto;
+  max-width: 46%;
+  object-fit: contain;
+}
+
+/* ---------- 窗口样式弹窗（便笺编辑 / 笔记本） ---------- */
+.wdlg-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 1250;
+  pointer-events: none; /* 铺满全屏但不挡下层卡片交互，只留弹窗本体可点 */
+}
+.wdlg-card {
+  position: absolute;
+  display: block;
+  max-width: calc(100vw - 32px);
+  /* 边框拆成上下两半：上半（标题栏）贴整卡外沿，下半（内容区）留在 .wdlg-body */
+  padding: 0;
+  border: none;
+  border-radius: 16px;
+  cursor: default;
+  box-shadow: var(--shadow-card-hover);
+  animation: wdlgIn 0.38s cubic-bezier(0.3, 1.25, 0.45, 1) both;
+  overflow: hidden; /* 标题栏底色沿卡片外圆角裁切，真正贴边 */
+  pointer-events: auto;
+}
+.wdlg-card:hover,
+.wdlg-card:active {
+  transform: none; /* 覆盖 .card 的悬停放大 */
+}
+@keyframes wdlgIn {
+  from {
+    opacity: 0;
+  }
+}
+/* .wdlg-inner 退为纯布局容器：底色 / 圆角 / 裁切分别由 .wdlg-head 与 .wdlg-body 承担 */
+.wdlg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  /* 标题栏已贴到卡片外沿（上面没有边框了），上内边距从 0 恢复为 9px */
+  padding: 9px 12px 9px 18px;
+  /* 便签纸渐变：与挂绳上的便笺卡片（.note-text）同色，暗色另见下方覆盖 */
+  background: linear-gradient(160deg, #f2eccf 0%, #fff9dc 100%);
+  border-bottom: 1px solid rgba(120, 96, 30, 0.22);
+  cursor: grab;
+}
+.wdlg-head:active {
+  cursor: grabbing;
+}
+/* 弹窗交互配色：琥珀色只用于交互态（聚焦环 / 悬浮 / 选中 tint /
+   落点指示线 / 激活图标），替代原蓝色高亮 #a87c10（浅）/ #e0c26a（深）；
+   文字一律中性灰，大面积底色保持白（暗色为深灰） */
+.wdlg-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #222;
+  user-select: none; /* 标题固定，不可编辑 */
+}
+.wdlg-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+/* 标题栏按钮：padding + 边框 + 一点阴影 */
+.wdlg-btn {
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid rgba(120, 96, 30, 0.28);
+  background: #fff;
+  color: #555;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(96, 76, 20, 0.16);
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
+}
+/* 悬浮统一用浅一档纸色，语义只靠图标本身的颜色区分（不做重色填充） */
+.wdlg-btn:hover {
+  background: #f6efd2;
+  border-color: rgba(120, 96, 30, 0.42);
+}
+.wdlg-ok:hover {
+  background: #f6efd2;
+  color: #333;
+  border-color: rgba(120, 96, 30, 0.42);
+}
+/* 带文字的标题栏按钮（笔记本的新增） */
+.wdlg-btn.wdlg-wide {
+  width: auto;
+  height: 28px;
+  padding: 5px 10px;
+  gap: 5px;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1;
+}
+.wdlg-close:hover {
+  background: #f6efd2;
+  color: #c42b1c; /* 删除：只把图标变红（语义红，保留） */
+}
+.wdlg-body {
+  /* 原卡片的下半边框：7px 内衬 + 5px 白框，只包内容区，与标题栏拼接 */
+  margin: 7px;
+  padding: 12px 14px 14px;
+  border: 5px solid #fff;
+  border-radius: 11px;
+  background: linear-gradient(165deg, #fdfdfe 55%, #f1f3fa 100%);
+  overflow: hidden;
+}
+
+/* ---------- 便笺编辑弹窗 ---------- */
+.note-editor-body {
+  padding: 10px;
+}
+.note-input {
+  display: block;
+  width: 100%;
+  height: 240px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 96, 30, 0.3);
+  background: #fff;
+  color: #222;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+  cursor: text;
+  -webkit-user-select: text;
+  user-select: text;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.note-input::placeholder {
+  color: #aaa;
+}
+.note-input:focus {
+  border-color: #a87c10; /* 琥珀 */
+  box-shadow: 0 0 0 3px rgba(168, 124, 16, 0.18);
+}
+
+/* ---------- 笔记本（便笺管理器） ---------- */
+.nb-body {
+  padding: 0;
+}
+.nb-inner {
+  display: flex;
+  align-items: stretch;
+  height: 380px;
+}
+.nb-list {
+  /* 拖拽把手 + 三个图标按钮 + 正文预览 */
+  width: 238px;
+  flex: none;
+  padding: 6px;
+  overflow-y: auto;
+  border-right: 1px solid rgba(120, 96, 30, 0.22);
+  scrollbar-width: thin;
+}
+.nb-list::-webkit-scrollbar {
+  width: 8px;
+}
+.nb-list::-webkit-scrollbar-thumb {
+  background: rgba(150, 118, 40, 0.4);
+  border-radius: 4px;
+}
+.nb-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.nb-empty {
+  padding: 14px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: #999;
+}
+/* 拖拽把手 */
+.nb-grip {
+  flex: none;
+  width: 18px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9a9aa2;
+  cursor: grab;
+  touch-action: none;
+  border-radius: 5px;
+}
+.nb-grip:hover {
+  background: rgba(168, 124, 16, 0.12);
+  color: #666;
+}
+.nb-grip:active {
+  cursor: grabbing;
+}
+.nb-list.sorting .nb-row {
+  cursor: grabbing;
+}
+.nb-row.dragging {
+  opacity: 0.45;
+}
+/* 拖拽落点指示线 */
+.nb-row.drop-top {
+  box-shadow: inset 0 2px 0 0 #a87c10;
+}
+.nb-row.drop-bottom {
+  box-shadow: inset 0 -2px 0 0 #a87c10;
+}
+.nb-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 7px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.nb-row:hover {
+  background: rgba(168, 124, 16, 0.12);
+}
+.nb-row.on {
+  background: rgba(168, 124, 16, 0.22);
+}
+.nb-row-main {
+  flex: 1;
+  min-width: 0;
+}
+.nb-row-text {
+  font-size: 12px;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-row-time {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: #999;
+}
+.nb-row-ops {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.nb-op {
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(120, 96, 30, 0.28);
+  background: #fff;
+  color: #555;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(96, 76, 20, 0.12);
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
+}
+.nb-op:hover {
+  background: #f6efd2;
+  color: #333;
+  border-color: rgba(120, 96, 30, 0.42);
+}
+.nb-op.danger:hover {
+  background: #f6efd2;
+  color: #c42b1c; /* 删除：只把图标变红（语义红，保留） */
+}
+/* 图标版行内按钮（置顶 / 挂起 / 删除） */
+.nb-op.icon {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+}
+.nb-op.icon.active {
+  color: #a87c10;
+  border-color: rgba(168, 124, 16, 0.5);
+}
+.nb-pin-mark {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(168, 124, 16, 0.16);
+  color: #555;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.nb-content {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 14px 16px;
+}
+.nb-text {
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: #222;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* 右侧回显即可编辑 */
+.nb-edit {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 96, 30, 0.28);
+  background: #fff;
+  font-family: inherit;
+  font-size: 13.5px;
+  resize: none;
+  outline: none;
+}
+.nb-edit:focus {
+  border-color: #a87c10;
+  box-shadow: 0 0 0 3px rgba(168, 124, 16, 0.16);
+}
+.nb-placeholder {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  font-size: 14px;
+  color: #999;
+}
+/* 未选中时的提示文案（可换行，避免撑满） */
+.nb-ph-text {
+  max-width: 260px;
+  text-align: center;
+  line-height: 1.6;
+}
+
+/* ---------- 暗色：弹窗 / 笔记本（交互色用便签纸琥珀，大底色保持深灰） ---------- */
+html[data-theme="dark"] .wdlg-card {
+  /* 对话框底板改实色：透明窗口下 .card 的 80% 透明度会透出桌面，
+     标题栏与内容区之间的外圈需要不透明底（与内容区顶部同色） */
+  background: #2b2b30;
+}
+html[data-theme="dark"] .wdlg-body {
+  background: linear-gradient(165deg, #2b2b30 55%, #232327 100%);
+  border-color: #3f3f46; /* 暗色下 5px 白框改为深灰框 */
+}
+html[data-theme="dark"] .wdlg-head {
+  background: linear-gradient(160deg, #4e4e55 0%, #3f3f46 100%);
+  border-bottom-color: rgba(30, 20, 10, 0.35);
+}
+html[data-theme="dark"] .wdlg-title {
+  color: #fff;
+}
+html[data-theme="dark"] .wdlg-btn {
+  background: #3a3a41;
+  border-color: rgba(255, 244, 220, 0.18);
+  color: #e6e6ea;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+html[data-theme="dark"] .wdlg-btn:hover {
+  background: rgba(255, 244, 220, 0.1);
+  border-color: rgba(224, 194, 106, 0.45);
+  color: #fff;
+}
+html[data-theme="dark"] .wdlg-ok:hover {
+  background: rgba(255, 244, 220, 0.1);
+  color: #fff;
+}
+html[data-theme="dark"] .wdlg-close:hover {
+  background: rgba(255, 244, 220, 0.1);
+  color: #ff7b6b; /* 删除：只把图标变红 */
+}
+html[data-theme="dark"] .note-input {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 244, 220, 0.18);
+  color: #eee;
+}
+html[data-theme="dark"] .note-input::placeholder {
+  color: #7c7c88;
+}
+html[data-theme="dark"] .note-input:focus {
+  border-color: #e0c26a;
+  box-shadow: 0 0 0 3px rgba(224, 194, 106, 0.22);
+}
+html[data-theme="dark"] .nb-list {
+  border-right-color: rgba(224, 194, 106, 0.22);
+}
+html[data-theme="dark"] .nb-list::-webkit-scrollbar-thumb {
+  background: rgba(224, 194, 106, 0.35);
+}
+html[data-theme="dark"] .nb-row:hover {
+  background: rgba(131, 130, 130, 0.14);
+}
+html[data-theme="dark"] .nb-row.on {
+  background: rgba(131, 130, 130, 0.26);
+}
+html[data-theme="dark"] .nb-row-text {
+  color: #e6e6ea;
+}
+html[data-theme="dark"] .nb-row-time {
+  color: #8e8e98;
+}
+html[data-theme="dark"] .nb-op {
+  background: #3a3a41;
+  border-color: rgba(255, 244, 220, 0.18);
+  color: #e6e6ea;
+}
+html[data-theme="dark"] .nb-op:hover {
+  background: rgba(255, 244, 220, 0.1);
+  color: #fff;
+}
+html[data-theme="dark"] .nb-op.danger:hover {
+  background: rgba(255, 244, 220, 0.1);
+  color: #ff7b6b;
+}
+html[data-theme="dark"] .nb-grip {
+  color: #8e8e98;
+}
+html[data-theme="dark"] .nb-grip:hover {
+  background: rgba(224, 194, 106, 0.14);
+  color: #e6e6ea;
+}
+html[data-theme="dark"] .nb-row.drop-top,
+html[data-theme="dark"] .nb-row.drop-bottom {
+  box-shadow: inset 0 2px 0 0 #e0c26a;
+}
+html[data-theme="dark"] .nb-row.drop-bottom {
+  box-shadow: inset 0 -2px 0 0 #e0c26a;
+}
+html[data-theme="dark"] .nb-op.icon.active {
+  color: #e0c26a;
+  border-color: rgba(224, 194, 106, 0.5);
+}
+html[data-theme="dark"] .nb-pin-mark {
+  background: rgba(224, 194, 106, 0.2);
+  color: #e6e6ea;
+}
+html[data-theme="dark"] .nb-edit {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 244, 220, 0.16);
+}
+html[data-theme="dark"] .nb-edit:focus {
+  border-color: #e0c26a;
+  box-shadow: 0 0 0 3px rgba(224, 194, 106, 0.2);
+}
+html[data-theme="dark"] .nb-text {
+  color: #e8e8ec;
+}
+html[data-theme="dark"] .nb-placeholder,
+html[data-theme="dark"] .nb-empty {
+  color: #8e8e98;
 }

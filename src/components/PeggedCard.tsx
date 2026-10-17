@@ -5,6 +5,7 @@ import { Spring } from "../spring";
 import { photoMaxHeight, ropeY, ROPE_TOP, PIN_ABOVE, SizeKey, cardWidth, REVEAL_BASE } from "../layout";
 import { api } from "../api";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
+import { isReordering } from "../reorderGuard";
 import type { Item } from "../types";
 
 interface Props {
@@ -85,6 +86,8 @@ export default function PeggedCard({ item, width, size, x, onContextMenu, onRemo
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
+    // 夹子重排会话中：不记拖拽起点（此次按下属于换位操作，不是拖出卡片）
+    if (isReordering()) return;
     downPt.current = { x: e.clientX, y: e.clientY, t: performance.now(), path: item.path };
     dragStarted.current = false;
     // 无需手动激活：窗口开启 acceptFirstMouse（tauri.conf.json），后台首击
@@ -93,6 +96,11 @@ export default function PeggedCard({ item, width, size, x, onContextMenu, onRemo
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    // 夹子重排会话中：整次拖拽都是沿绳换位。此时左键按住、指针会掠过
+    // 其它卡片（也会压在被拖卡片自己身上），若继续走下面的兜底分支，
+    // 会把被掠过的卡片误当成「正在拖出」而发起原生拖拽——拖影变成
+    // 别人的图片。重排期间一律不触发卡片的文件拖出
+    if (isReordering()) return;
     // 兜底：首按可能因窗口刚从穿透态切换（mousehook 60ms 轮询延迟）或应用未激活而
     // 没送达 webview，导致 downPt 从未被设置。用 buttons 判断是否仍按住左键，重建起点。
     // 进行中原生拖拽时不重建，避免误触发。

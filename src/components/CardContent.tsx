@@ -3,6 +3,27 @@ import type { Item } from "../types";
 // 卡片内容：图片 / 文件夹 / 文件。PeggedCard 与折叠堆叠（OverflowFan）共用，
 // 保证两种场景下的卡片视觉完全一致。
 export default function CardContent({ item }: { item: Item }) {
+  // 便笺管理入口卡片（折叠堆叠里的预览）：左右两张小图
+  if (item.kind === "entry") {
+    return (
+      <div className="card-tile entry">
+        <div className="entry-mini">
+          <img src="/note.png" alt="新增便笺" draggable={false} />
+          <img src="/notebook.png" alt="打开笔记本" draggable={false} />
+        </div>
+      </div>
+    );
+  }
+  // 便笺卡片（折叠堆叠里的预览）
+  if (item.kind === "note") {
+    return (
+      <div className="card-tile note">
+        <div className={"note-mini" + (item.text ? "" : " empty")}>
+          {item.text || "（空便笺）"}
+        </div>
+      </div>
+    );
+  }
   if (item.thumb?.kind === "image" && item.thumb.b64) {
     return (
       <img
