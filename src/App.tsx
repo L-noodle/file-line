@@ -669,7 +669,12 @@ export default function App() {
     async (noteId: string) => {
       const ok = await confirm(
         "删除后，绳子上挂着的该便笺卡片也会一起删除。是否继续？",
-        { title: "删除便笺", kind: "warning" }
+        {
+          title: "删除便笺",
+          kind: "warning",
+          okLabel: "删除",
+          cancelLabel: "取消",
+        }
       );
       if (!ok) return;
       const ids = itemsRef.current
