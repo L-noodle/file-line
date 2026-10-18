@@ -84,6 +84,7 @@ fn state_path(app: &AppHandle) -> PathBuf {
 /// 持久化条目：兼容旧的纯路径字符串格式。
 /// - 文件 / 文件夹卡片：{ path, source }
 /// - 便笺卡片：{ note_id }（正文存在 notes 里，卡片只是挂在绳上的一份视图）
+/// - 待办卡片：{ todo_id }（内容存在 todos 里）
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 enum PersistedItem {
@@ -96,6 +97,10 @@ enum PersistedItem {
         #[serde(alias = "noteId")]
         note_id: String,
     },
+    Todo {
+        #[serde(alias = "todoId")]
+        todo_id: String,
+    },
     Path(String),
 }
 
@@ -104,12 +109,18 @@ impl PersistedItem {
         match self {
             PersistedItem::Full { path, .. } => Some(path),
             PersistedItem::Path(p) => Some(p),
-            PersistedItem::Note { .. } => None,
+            PersistedItem::Note { .. } | PersistedItem::Todo { .. } => None,
         }
     }
     fn note_id(&self) -> Option<&str> {
         match self {
             PersistedItem::Note { note_id } => Some(note_id),
+            _ => None,
+        }
+    }
+    fn todo_id(&self) -> Option<&str> {
+        match self {
+            PersistedItem::Todo { todo_id } => Some(todo_id),
             _ => None,
         }
     }
@@ -130,7 +141,37 @@ struct PersistedNote {
     text: String,
     #[serde(default, alias = "updatedAt")]
     updated_at: i64,
+    #[serde(default, alias = "createdAt")]
+    created_at: i64,
     /// 置顶：固定到笔记本列表顶部
+    #[serde(default)]
+    pinned: bool,
+}
+
+/// 待办（笔记本数据），与绳子上的卡片独立：卡片取下不影响待办本体。
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct PersistedTodo {
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default, alias = "startAt")]
+    start_at: i64,
+    #[serde(default, alias = "endAt")]
+    end_at: i64,
+    #[serde(default)]
+    repeat: bool,
+    #[serde(default, alias = "remindStart")]
+    remind_start: Option<i64>,
+    #[serde(default, alias = "remindEnd")]
+    remind_end: Option<i64>,
+    #[serde(default)]
+    done: bool,
+    #[serde(default, alias = "updatedAt")]
+    updated_at: i64,
+    #[serde(default, alias = "createdAt")]
+    created_at: i64,
     #[serde(default)]
     pinned: bool,
 }
@@ -149,6 +190,8 @@ struct Persisted {
     size: Option<String>,
     #[serde(default)]
     notes: Vec<PersistedNote>,
+    #[serde(default)]
+    todos: Vec<PersistedTodo>,
 }
 
 fn read_state(app: &AppHandle) -> Persisted {
@@ -175,19 +218,40 @@ fn get_state(app: AppHandle) -> serde_json::Value {
             "path": i.path(),
             "source": i.source(),
             "noteId": i.note_id(),
+            "todoId": i.todo_id(),
         })).collect::<Vec<_>>(),
         "size": p.size,
         "notes": p.notes.iter().map(|n| serde_json::json!({
             "id": n.id,
             "text": n.text,
             "updatedAt": n.updated_at,
+            "createdAt": n.created_at,
             "pinned": n.pinned,
+        })).collect::<Vec<_>>(),
+        "todos": p.todos.iter().map(|t| serde_json::json!({
+            "id": t.id,
+            "title": t.title,
+            "text": t.text,
+            "startAt": t.start_at,
+            "endAt": t.end_at,
+            "repeat": t.repeat,
+            "remindStart": t.remind_start,
+            "remindEnd": t.remind_end,
+            "done": t.done,
+            "updatedAt": t.updated_at,
+            "createdAt": t.created_at,
+            "pinned": t.pinned,
         })).collect::<Vec<_>>(),
     })
 }
 
 #[tauri::command]
-fn save_state(app: AppHandle, items: Vec<PersistedItem>, notes: Vec<PersistedNote>) {
+fn save_state(
+    app: AppHandle,
+    items: Vec<PersistedItem>,
+    notes: Vec<PersistedNote>,
+    todos: Vec<PersistedTodo>,
+) {
     let size = app.state::<AppState>().size.lock().unwrap().as_str().to_string();
     write_state(
         &app,
@@ -195,8 +259,22 @@ fn save_state(app: AppHandle, items: Vec<PersistedItem>, notes: Vec<PersistedNot
             items,
             size: Some(size),
             notes,
+            todos,
         },
     );
+}
+
+/// 待办提醒：只把窗口显示出来。前端 React 的 revealed 仍为 false
+/// （绳子保持收起，仅展示消息本身），但 Rust 侧必须置 revealed=true——
+/// Windows 钩子的命中区捕获受 revealed 门控，否则提醒消息收不到点击。
+/// 关闭提醒时前端调 hide_rope 复位。
+#[tauri::command]
+fn show_reminder_window(app: AppHandle) {
+    mousehook::set_revealed(true);
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.set_always_on_top(true);
+    }
 }
 
 /// 默认程序打开。
@@ -545,6 +623,7 @@ pub fn run() {
             window_resized,
             show_rope,
             hide_rope,
+            show_reminder_window,
             activate_app,
             request_mac_permission
         ])
@@ -608,6 +687,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // 便笺功能入口：置顶（使用说明之上），绳子没唤出时由前端一并唤出
     let note_new = MenuItem::with_id(app, "note-new", "新增便笺", true, None::<&str>)?;
     let note_open = MenuItem::with_id(app, "note-open", "打开笔记本", true, None::<&str>)?;
+    // 待办入口：与便笺同款（新建待办 + 挂卡片 + 编辑窗）
+    let todo_new = MenuItem::with_id(app, "todo-new", "新增待办", true, None::<&str>)?;
     let sep = tauri::menu::PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
@@ -615,7 +696,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &note_new, &note_open, &sep, &help, &sep, &size_menu, &autostart, &sep, &quit,
+            &note_new, &todo_new, &note_open, &sep, &help, &sep, &size_menu, &autostart, &sep,
+            &quit,
         ],
     )?;
     drop(cur_size);
@@ -639,6 +721,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 "note-new" => {
                     // 新增便笺：前端建便笺、挂卡片并弹出编辑窗
                     let _ = app.emit("tray-new-note", ());
+                }
+                "todo-new" => {
+                    // 新增待办：前端建待办、挂卡片并弹出编辑窗
+                    let _ = app.emit("tray-new-todo", ());
                 }
                 "note-open" => {
                     // 打开笔记本（便笺管理器）

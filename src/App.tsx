@@ -6,14 +6,19 @@ import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import Rope from "./components/Rope";
 import PeggedCard from "./components/PeggedCard";
 import NoteCard from "./components/NoteCard";
+import TodoCard from "./components/TodoCard";
 import NoteEditor from "./components/NoteEditor";
+import TodoEditor from "./components/TodoEditor";
+import TodoDetail from "./components/TodoDetail";
+import TodoReminder from "./components/TodoReminder";
 import Notebook from "./components/Notebook";
 import EntryCard from "./components/EntryCard";
 import OverflowFan from "./components/OverflowFan";
 import ContextMenu, { MenuState } from "./components/ContextMenu";
 import HelpDialog from "./components/HelpDialog";
 import type { Rect } from "./components/WindowDialog";
-import type { Item, Note } from "./types";
+import { emptyTodoDraft, todoDraftOf, type TodoDraft } from "./components/TodoFields";
+import type { Item, Note, Todo } from "./types";
 import { api } from "./api";
 import type { NoteFile } from "./api";
 import {
@@ -35,6 +40,8 @@ import {
   sag,
   SizeKey,
   spacing,
+  todoCardHeight,
+  todoCardWidth,
   visibleCapacity,
   visibleCenters,
   WIDE_DOCK_MAX,
@@ -48,6 +55,32 @@ let seq = 1;
 const nextId = () => `i${seq++}`;
 let noteSeq = 1;
 const nextNoteId = () => `n${Date.now().toString(36)}-${noteSeq++}`;
+let todoSeq = 1;
+const nextTodoId = () => `t${Date.now().toString(36)}-${todoSeq++}`;
+
+// ---------- 待办提醒调度 ----------
+type ReminderKind = "start" | "end";
+type ReminderTarget = { todoId: string; kind: ReminderKind };
+
+/** 提醒的触发时间戳：重复待办按「每天同一时间」取下一次发生 */
+function occurrenceAt(t: Todo, kind: ReminderKind): number {
+  const base = kind === "start" ? t.startAt : t.endAt;
+  if (!base) return 0;
+  if (!t.repeat) return base;
+  const d = new Date(base);
+  const now = new Date();
+  const occ = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    d.getHours(),
+    d.getMinutes(),
+    0,
+    0
+  );
+  if (occ.getTime() <= Date.now()) occ.setDate(occ.getDate() + 1);
+  return occ.getTime();
+}
 
 // 便笺管理入口卡片：常驻绳尾（最右）的虚拟卡片——不落盘、不可移除 / 拖动 / 右键。
 // 空绳时它是唯一一张（居中）；有卡片时永远在最右，滚轮回看折叠时随堆叠一起收起
@@ -91,6 +124,27 @@ export default function App() {
   const [notes, setNotes] = useState<Note[]>([]); // 笔记本数据（卡片取下不影响）
   const notesRef = useRef<Note[]>([]);
   notesRef.current = notes;
+  // ---------- 待办 ----------
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const todosRef = useRef<Todo[]>([]);
+  todosRef.current = todos;
+  // 待办编辑弹窗（可同时开多个；同一待办只开一个，重复触发就是置顶）
+  const [todoEditors, setTodoEditors] = useState<
+    { todoId: string; cardId: string; draft: TodoDraft; creating: boolean }[]
+  >([]);
+  const todoEditorsRef = useRef(todoEditors);
+  todoEditorsRef.current = todoEditors;
+  const [todoDetailId, setTodoDetailId] = useState<string | null>(null);
+  // ---------- 待办提醒 ----------
+  const [reminder, setReminder] = useState<ReminderTarget | null>(null);
+  const [reminderRect, setReminderRect] = useState<Rect | null>(null);
+  const [snoozes, setSnoozes] = useState<
+    { todoId: string; kind: ReminderKind; at: number }[]
+  >([]);
+  const snoozesRef = useRef(snoozes);
+  snoozesRef.current = snoozes;
+  const [snoozeMin, setSnoozeMin] = useState(5);
+  const firedRef = useRef<Set<string>>(new Set()); // 已触发过的提醒（本次运行期）
   // 便笺编辑弹窗（可同时开多个；同一便笺只开一个，重复触发就是置顶）
   // creating = 本次是新建（空内容提交则丢弃）
   const [editors, setEditors] = useState<
@@ -108,6 +162,8 @@ export default function App() {
     setZMap((prev) => ({ ...prev, [key]: v }));
   }, []);
   const editorKey = (noteId: string) => `editor:${noteId}`;
+  const todoEditorKey = (todoId: string) => `todo-editor:${todoId}`;
+  const TODO_DETAIL_KEY = "todo-detail";
   const NOTEBOOK_KEY = "notebook";
   // 便笺 / 笔记本弹窗矩形（按 id 分开存，两个弹窗可同时打开）
   const [dlgRects, setDlgRects] = useState<Record<string, Rect>>({});
@@ -133,6 +189,14 @@ export default function App() {
     (r: Rect | null) => reportRect(NOTEBOOK_KEY, r),
     [reportRect]
   );
+  const todoDetailRect = useCallback(
+    (r: Rect | null) => reportRect(TODO_DETAIL_KEY, r),
+    [reportRect]
+  );
+  const reminderRectFor = useCallback(
+    (r: Rect | null) => setReminderRect(r),
+    []
+  );
   const loadedRef = useRef(false); // 初始状态读完前不回写，避免覆盖持久化数据
   const [width, setWidth] = useState(window.innerWidth);
   const [dragHover, setDragHover] = useState(false); // 外部拖拽悬停在可放置区（绳子彩色流动反馈）
@@ -144,6 +208,7 @@ export default function App() {
   // ---------- Dock 放大联动（Rust 钩子转发条带内鼠标位置） ----------
   const panelRef = useRef<HTMLDivElement>(null);
   const mouseRef = useRef<number | null>(null); // 条带内鼠标逻辑 x（null = 离开，全部缩回）
+  const mouseYRef = useRef<number | null>(null); // 条带内鼠标逻辑 y（穿透态悬停判定用）
   const slotsRef = useRef<{ el: HTMLElement; x: number }[]>([]); // 可见卡片 DOM + 中心 x
   const zoneBottomRef = useRef(0); // 卡片感应区底部 y（低于此不触发放大）
   const [toast, setToast] = useState<string | null>(null);
@@ -167,7 +232,12 @@ export default function App() {
   // 弹窗（使用说明 / 便笺 / 笔记本）打开期间窗口是否被临时全屏化
   const modalFullRef = useRef(false);
   // 任一弹窗打开：不自动收起绳子（弹窗期间窗口已全屏化）
-  const anyModal = helpOpen || editors.length > 0 || notebookOpen;
+  const anyModal =
+    helpOpen ||
+    editors.length > 0 ||
+    todoEditors.length > 0 ||
+    todoDetailId != null ||
+    notebookOpen;
   const anyModalRef = useRef(false);
   anyModalRef.current = anyModal;
 
@@ -231,6 +301,78 @@ export default function App() {
     toastTimer.current = window.setTimeout(() => setToast(null), 2200);
   }, []);
 
+  // ---------- 待办提醒 ----------
+  /** 到点弹出提醒消息：此时不展示拖拽绳子，只展示消息本身 */
+  const fireReminder = useCallback(
+    (t: ReminderTarget) => {
+      setReminder(t);
+      setSnoozeMin(5);
+      cancelHide();
+      // 绳子未唤出：只把窗口显示出来（不唤出绳子），消息独立展示
+      if (!revealedRef.current) api.showReminderWindow().catch(console.error);
+    },
+    [cancelHide]
+  );
+
+  /** 关闭提醒：绳子本来没收起的话，把窗口藏回去（保持只展示消息本身） */
+  const closeReminder = useCallback(() => {
+    setReminder(null);
+    setSnoozes([]);
+    if (!revealedRef.current) api.hideRope().catch(console.error);
+  }, []);
+
+  /** 稍后 N 分钟再次提醒（N 可改，且换算后的时刻不超过结束时间） */
+  const snoozeReminder = useCallback(
+    (target: ReminderTarget, minutes: number) => {
+      const t = todosRef.current.find((x) => x.id === target.todoId);
+      let at = Date.now() + Math.max(1, minutes) * 60000;
+      if (t?.endAt && at > t.endAt) at = Math.max(Date.now() + 60000, t.endAt);
+      setSnoozes((prev) => [
+        ...prev.filter(
+          (s) => !(s.todoId === target.todoId && s.kind === target.kind)
+        ),
+        { todoId: target.todoId, kind: target.kind, at },
+      ]);
+      closeReminder();
+    },
+    [closeReminder]
+  );
+
+  // 提醒调度：每 15s 检查一次（稍后提醒到点重弹 + 开始前 / 结束前定时提醒）
+  useEffect(() => {
+    const tick = () => {
+      const now = Date.now();
+      // 稍后提醒：到点再弹一次
+      const due = snoozesRef.current.filter((s) => s.at <= now);
+      if (due.length > 0) {
+        fireReminder(due[0]);
+        setSnoozes((prev) => [
+          ...prev.filter((s) => s.at > now),
+          ...due.slice(1),
+        ]);
+      }
+      // 定时提醒：开始前 / 结束前 N 分钟（每次运行期只弹一次）
+      for (const t of todosRef.current) {
+        if (t.done) continue;
+        for (const kind of ["start", "end"] as const) {
+          const offset = kind === "start" ? t.remindStart : t.remindEnd;
+          if (offset == null) continue;
+          const occ = occurrenceAt(t, kind);
+          if (!occ) continue;
+          const fireAt = occ - offset * 60000;
+          if (fireAt <= 0 || fireAt > now) continue;
+          const key = `${t.id}:${kind}:${fireAt}`;
+          if (firedRef.current.has(key)) continue;
+          firedRef.current.add(key);
+          fireReminder({ todoId: t.id, kind });
+          return; // 一次只弹一个
+        }
+      }
+    };
+    const timer = window.setInterval(tick, 15000);
+    return () => window.clearInterval(timer);
+  }, [fireReminder]);
+
   // macOS 授权入口：弹出系统授权框；授权成功后精细穿透即时生效
   const requestMacPermission = useCallback(() => {
     api
@@ -267,18 +409,46 @@ export default function App() {
               id: n.id,
               text: n.text ?? "",
               updatedAt: n.updatedAt ?? 0,
+              createdAt: n.createdAt ?? n.updatedAt ?? 0,
               pinned: !!n.pinned,
             }))
           : [];
         setNotes(loaded);
         notesRef.current = loaded;
+        // 待办同样先于卡片载入
+        const loadedTodos: Todo[] = Array.isArray(st.todos)
+          ? st.todos.map((t) => ({
+              id: t.id,
+              title: t.title ?? "",
+              text: t.text ?? "",
+              startAt: t.startAt ?? 0,
+              endAt: t.endAt ?? 0,
+              repeat: !!t.repeat,
+              remindStart: t.remindStart ?? null,
+              remindEnd: t.remindEnd ?? null,
+              done: !!t.done,
+              updatedAt: t.updatedAt ?? 0,
+              createdAt: t.createdAt ?? t.updatedAt ?? 0,
+              pinned: !!t.pinned,
+            }))
+          : [];
+        setTodos(loadedTodos);
+        todosRef.current = loadedTodos;
         if (Array.isArray(st.items)) {
           for (const it of st.items) {
-            // 兼容两种落盘形态：便笺卡片只有 noteId，文件卡片有 path
-            const it0 = it as { path?: string; source?: string; noteId?: string };
+            // 兼容三种落盘形态：便笺 / 待办卡片只有 id，文件卡片有 path
+            const it0 = it as {
+              path?: string;
+              source?: string;
+              noteId?: string;
+              todoId?: string;
+            };
             if (it0.noteId) {
               const n = loaded.find((x) => x.id === it0.noteId);
               addNoteCard(it0.noteId, n?.text ?? "");
+            } else if (it0.todoId) {
+              const t = loadedTodos.find((x) => x.id === it0.todoId);
+              addTodoCard(it0.todoId, t?.title ?? "");
             } else if (typeof it0.path === "string" && it0.path) {
               await addItem(it0.path, it0.source === "drag" ? "drag" : "clip");
             }
@@ -324,6 +494,10 @@ export default function App() {
     // 托盘菜单「新增便笺」：新建便笺（挂卡片 + 编辑窗），绳子未唤出则先唤出
     const un10 = listen("tray-new-note", () => {
       createNote();
+    });
+    // 托盘菜单「新增待办」：新建待办（挂卡片 + 编辑窗）
+    const un12 = listen("tray-new-todo", () => {
+      createTodo();
     });
     // 托盘菜单「打开笔记本」：唤出绳子并打开便笺管理器
     const un11 = listen("tray-open-notebook", () => {
@@ -447,6 +621,7 @@ export default function App() {
       un9.then((f) => f());
       un10.then((f) => f());
       un11.then((f) => f());
+      un12.then((f) => f());
       window.removeEventListener("card-drag-start", onDragStart);
       window.removeEventListener("card-drag-end", onDragEnd);
       window.removeEventListener("resize", onResize);
@@ -479,10 +654,50 @@ export default function App() {
 
   /** 新建便笺（返回 id，便于笔记本立即选中） */
   const newNote = useCallback(() => {
-    const note: Note = { id: nextNoteId(), text: "", updatedAt: Date.now() };
+    const now = Date.now();
+    const note: Note = { id: nextNoteId(), text: "", updatedAt: now, createdAt: now };
     setNotes((prev) => [note, ...prev]);
     notesRef.current = [note, ...notesRef.current];
     return note.id;
+  }, []);
+
+  /** 把待办挂到绳子上（笔记本里可重复挂起，同一待办可有多张卡片） */
+  const addTodoCard = useCallback((todoId: string, title: string) => {
+    const item: Item = {
+      id: nextId(),
+      path: "",
+      name: title || "待办",
+      kind: "todo",
+      tilt: (Math.random() * 2 - 1) * 2.5,
+      index: seq,
+      source: "clip",
+      todoId,
+    };
+    setItems((prev) => [...prev, item]);
+    // 新卡片进绳：回到最右端（最新）
+    setScrollPx(0);
+    return item;
+  }, []);
+
+  /** 新建待办（返回 id，便于笔记本立即选中） */
+  const newTodo = useCallback(() => {
+    const now = Date.now();
+    const todo: Todo = {
+      id: nextTodoId(),
+      title: "",
+      text: "",
+      startAt: 0,
+      endAt: 0,
+      repeat: false,
+      remindStart: null,
+      remindEnd: null,
+      done: false,
+      updatedAt: now,
+      createdAt: now,
+    };
+    setTodos((prev) => [todo, ...prev]);
+    todosRef.current = [todo, ...todosRef.current];
+    return todo.id;
   }, []);
 
   const addItem = useCallback(async (path: string, source: "drag" | "clip") => {
@@ -559,6 +774,41 @@ export default function App() {
     openNoteEditor(id, item.id, "", true);
     return id;
   }, [addNoteCard, cancelHide, newNote, openNoteEditor, reveal]);
+
+  /** 打开待办编辑窗：同一待办已开着就只置顶，不重复开窗 */
+  const openTodoEditor = useCallback(
+    (todoId: string, cardId: string, draft: TodoDraft, creating: boolean) => {
+      cancelHide();
+      bringToFront(todoEditorKey(todoId));
+      setTodoEditors((prev) =>
+        prev.some((e) => e.todoId === todoId)
+          ? prev
+          : [...prev, { todoId, cardId, draft, creating }]
+      );
+    },
+    [bringToFront, cancelHide]
+  );
+
+  /** 新建待办：先建一条，再挂一张卡片到绳上，同时弹出编辑窗 */
+  const createTodo = useCallback(() => {
+    cancelHide();
+    const id = newTodo();
+    const item = addTodoCard(id, "");
+    reveal();
+    openTodoEditor(id, item.id, emptyTodoDraft(), true);
+    return id;
+  }, [addTodoCard, cancelHide, newTodo, openTodoEditor, reveal]);
+
+  /** 双击待办卡片 / 菜单「编辑待办」/ 详情弹窗「编辑」：打开编辑窗 */
+  const editTodoCard = useCallback(
+    (todoId: string) => {
+      const t = todosRef.current.find((x) => x.id === todoId);
+      if (!t) return;
+      setTodoDetailId(null);
+      openTodoEditor(t.id, "", todoDraftOf(t), false);
+    },
+    [openTodoEditor]
+  );
 
   /** 双击便笺卡片 / 菜单「编辑便笺」：打开编辑窗 */
   const editNoteCard = useCallback(
@@ -686,7 +936,146 @@ export default function App() {
     [removeItems]
   );
 
-  // 持久化（卡片 / 便笺变化时）。初始状态读完前不回写，避免空数据覆盖磁盘。
+  // ---------- 待办 ----------
+  /** 打勾：草稿写回待办与绳上所有引用它的卡片（卡片只存标题） */
+  const submitTodo = useCallback(
+    (todoId: string, draft: TodoDraft) => {
+      const ed = todoEditorsRef.current.find((e) => e.todoId === todoId);
+      setTodoEditors((prev) => prev.filter((e) => e.todoId !== todoId));
+      if (!ed) return;
+      if (!draft.title.trim() && !draft.text.trim() && ed.creating) {
+        // 新建却没写内容：连卡片带待办一起丢弃，不留垃圾
+        removeItems([ed.cardId]);
+        setTodos((prev) => prev.filter((t) => t.id !== ed.todoId));
+        return;
+      }
+      setTodos((prev) =>
+        prev.map((t) =>
+          t.id === ed.todoId
+            ? { ...t, ...draft, title: draft.title.trim(), updatedAt: Date.now() }
+            : t
+        )
+      );
+      setItems((prev) =>
+        prev.map((i) =>
+          i.todoId === ed.todoId
+            ? { ...i, name: draft.title.trim() || "待办" }
+            : i
+        )
+      );
+    },
+    [removeItems]
+  );
+
+  /** 关闭编辑窗：新建且一字未写 → 连卡片带待办丢弃，不留空壳 */
+  const closeTodoEditor = useCallback(
+    (todoId: string, draft: TodoDraft) => {
+      const ed = todoEditorsRef.current.find((e) => e.todoId === todoId);
+      setTodoEditors((prev) => prev.filter((e) => e.todoId !== todoId));
+      if (ed?.creating && !draft.title.trim() && !draft.text.trim()) {
+        removeItems([ed.cardId]);
+        setTodos((prev) => prev.filter((t) => t.id !== ed.todoId));
+      }
+    },
+    [removeItems]
+  );
+
+  /** 完成 / 取消完成：完成后取消置顶（已完成的待办不置顶） */
+  const toggleTodoDone = useCallback((todoId: string) => {
+    setTodos((prev) =>
+      prev.map((t) =>
+        t.id === todoId ? { ...t, done: !t.done, pinned: false } : t
+      )
+    );
+  }, []);
+
+  /** 置顶 / 取消置顶（已完成的待办不支持置顶） */
+  const togglePinTodo = useCallback((todoId: string) => {
+    setTodos((prev) =>
+      prev.map((t) => (t.id === todoId && !t.done ? { ...t, pinned: !t.pinned } : t))
+    );
+  }, []);
+
+  /** 笔记本里拖拽排序：把该待办插到展示顺序的第 index 位。
+   *  展示顺序分三组：置顶且未完成 → 未完成 → 已完成，只允许同组内移动 */
+  const reorderTodo = useCallback((todoId: string, target: number) => {
+    setTodos((prev) => {
+      const g = (t: Todo) => (t.done ? 2 : t.pinned ? 0 : 1);
+      const ordered = [...prev].sort((a, b) => g(a) - g(b));
+      const from = ordered.findIndex((t) => t.id === todoId);
+      if (from < 0) return prev;
+      const moved = ordered[from];
+      const pinnedCount = ordered.filter((t) => !t.done && t.pinned).length;
+      const activeCount = ordered.filter((t) => !t.done).length;
+      let lo: number;
+      let hi: number;
+      if (moved.done) {
+        lo = activeCount;
+        hi = ordered.length;
+      } else if (moved.pinned) {
+        lo = 0;
+        hi = pinnedCount;
+      } else {
+        lo = pinnedCount;
+        hi = activeCount;
+      }
+      const to = Math.max(lo, Math.min(hi, target));
+      if (to === from || to === from + 1) return prev;
+      const next = ordered.slice();
+      next.splice(from, 1);
+      next.splice(to > from ? to - 1 : to, 0, moved);
+      return next;
+    });
+  }, []);
+
+  /** 笔记本 → 挂起（已完成的待办不能挂到绳子上） */
+  const hangTodo = useCallback(
+    (todoId: string) => {
+      const t = todosRef.current.find((x) => x.id === todoId);
+      if (!t || t.done) return;
+      addTodoCard(todoId, t.title);
+      reveal();
+      showToast("已挂到绳子上");
+    },
+    [addTodoCard, reveal, showToast]
+  );
+
+  /** 笔记本 → 删除（二次确认：绳上卡片一起删） */
+  const deleteTodo = useCallback(
+    async (todoId: string) => {
+      const ok = await confirm(
+        "删除后，绳子上挂着的该待办卡片也会一起删除。是否继续？",
+        {
+          title: "删除待办",
+          kind: "warning",
+          okLabel: "删除",
+          cancelLabel: "取消",
+        }
+      );
+      if (!ok) return;
+      const ids = itemsRef.current
+        .filter((i) => i.todoId === todoId)
+        .map((i) => i.id);
+      if (ids.length > 0) removeItems(ids);
+      setTodos((prev) => prev.filter((t) => t.id !== todoId));
+    },
+    [removeItems]
+  );
+
+  /** 笔记本右侧直接编辑待办：实时写回待办与绳上卡片（标题同步到卡片） */
+  const editTodoDraft = useCallback((todoId: string, draft: TodoDraft) => {
+    setTodos((prev) =>
+      prev.map((t) => (t.id === todoId ? { ...t, ...draft } : t))
+    );
+    setItems((prev) =>
+      prev.map((i) =>
+        i.todoId === todoId ? { ...i, name: draft.title.trim() || "待办" } : i
+      )
+    );
+  }, []);
+
+  /** 待办编辑结束（失焦）：刷新修改时间 */
+  // 持久化（卡片 / 便笺 / 待办变化时）。初始状态读完前不回写，避免空数据覆盖磁盘。
   useEffect(() => {
     if (!loadedRef.current) return;
     api
@@ -694,12 +1083,15 @@ export default function App() {
         items.map((i) =>
           i.kind === "note" && i.noteId
             ? { noteId: i.noteId }
-            : { path: i.path, source: i.source }
+            : i.kind === "todo" && i.todoId
+              ? { todoId: i.todoId }
+              : { path: i.path, source: i.source }
         ),
-        notes
+        notes,
+        todos
       )
       .catch(console.error);
-  }, [items, notes]);
+  }, [items, notes, todos]);
 
   // ---------- 菜单 ----------
   const openCardMenu = (e: React.MouseEvent, item: Item) => {
@@ -710,11 +1102,15 @@ export default function App() {
     const leftIds = items.slice(0, idx).map((i) => i.id);
     const rightIds = items.slice(idx + 1).map((i) => i.id);
     const isNote = item.kind === "note";
+    const isTodo = item.kind === "todo";
+    const todo = isTodo
+      ? todosRef.current.find((t) => t.id === item.todoId)
+      : undefined;
     setMenu({
       x: e.clientX,
       y: e.clientY,
       items: [
-        // 便笺卡片：没有文件可打开，首项换成编辑
+        // 便笺 / 待办卡片：没有文件可打开，首项换成编辑
         ...(isNote
           ? [
               {
@@ -723,7 +1119,23 @@ export default function App() {
                 onClick: () => editNoteCard(item),
               },
             ]
-          : [
+          : isTodo
+            ? [
+                {
+                  label: "编辑待办（双击）",
+                  bold: true,
+                  onClick: () => item.todoId && editTodoCard(item.todoId),
+                },
+                {
+                  label: "查看详情（单击）",
+                  onClick: () => setTodoDetailId(item.todoId!),
+                },
+                {
+                  label: todo?.done ? "取消完成待办" : "完成待办",
+                  onClick: () => item.todoId && toggleTodoDone(item.todoId),
+                },
+              ]
+            : [
               {
                 label: "打开（双击）",
                 onClick: () => api.openPath(item.path).catch(console.error),
@@ -786,7 +1198,9 @@ export default function App() {
                   text: i.text ?? "",
                 }));
               const saved = await api.saveToFolder(
-                items.filter((i) => i.kind !== "note").map((i) => i.path),
+                items
+                  .filter((i) => i.kind !== "note" && i.kind !== "todo")
+                  .map((i) => i.path),
                 folder,
                 noteFiles,
               );
@@ -976,6 +1390,15 @@ export default function App() {
     [createNote, stopEntryClick]
   );
 
+  // 入口卡片中图（待办）：新建待办 —— 挂一张卡片 + 弹出编辑窗
+  const onTodoEntryClick = useCallback(
+    (e: React.MouseEvent) => {
+      stopEntryClick(e);
+      createTodo();
+    },
+    [createTodo, stopEntryClick]
+  );
+
   // 入口卡片右图（笔记本）：打开便笺管理器
   const onNotebookEntryClick = useCallback(
     (e: React.MouseEvent) => {
@@ -1106,10 +1529,13 @@ export default function App() {
       const cardW = cw * DOCK_MAX + 16;
       // +NAME_SECOND_LINE：文件名两行后的卡片下半部分也要能点到
       const cardH = (26 + ph + 18 + NAME_SECOND_LINE) * DOCK_MAX + 14;
-      // 便笺卡片更大，Dock 放大上限仅 WIDE_DOCK_MAX（1.06）：四周留的
+      // 便笺卡片更大，Dock 放大上限仅 WIDE_DOCK_MAX（1.12）：四周留的
       // 16 / 36px 余量足以覆盖放大外扩，按实际尺寸 + 余量算命中区
       const noteW = noteCardWidth(size) * WIDE_DOCK_MAX + 16;
       const noteH = 26 + noteCardHeight(size) * WIDE_DOCK_MAX + 36;
+      // 待办卡片：与便笺同宽，高度矮一档，同口径算命中区
+      const todoW = todoCardWidth(size) * WIDE_DOCK_MAX + 16;
+      const todoH = 26 + todoCardHeight(size) * WIDE_DOCK_MAX + 36;
       // 入口卡片：与便笺卡片同宽、同口径算命中区
       const entryW = entryCardWidth(size) * WIDE_DOCK_MAX + 16;
       const entryH = 26 + entryCardHeight(size) * WIDE_DOCK_MAX + 36;
@@ -1119,15 +1545,19 @@ export default function App() {
         const w =
           v.item.kind === "note"
             ? noteW
-            : v.item.kind === "entry"
-              ? entryW
-              : cardW;
+            : v.item.kind === "todo"
+              ? todoW
+              : v.item.kind === "entry"
+                ? entryW
+                : cardW;
         const h =
           v.item.kind === "note"
             ? noteH
-            : v.item.kind === "entry"
-              ? entryH
-              : cardH;
+            : v.item.kind === "todo"
+              ? todoH
+              : v.item.kind === "entry"
+                ? entryH
+                : cardH;
         rects.push([cx - w / 2, y - 4, w, h]);
       }
       if (folded.length > 0) {
@@ -1140,7 +1570,12 @@ export default function App() {
     // 弹窗打开：窗口已全屏化（逻辑坐标=屏幕坐标），弹窗矩形（留 16px
     // hover 余量）与卡片命中区合并上报，弹窗期间卡片仍可点击 /
     // 悬停放大 / 滚轮回看 / 拖入挂绳，其余区域照常穿透
-    for (const r of [...Object.values(dlgRects), helpRect]) {
+    // 待办提醒消息：常驻命中区（绳子收起时只展示消息本身，消息必须可点）
+    for (const r of [
+      ...Object.values(dlgRects),
+      helpRect,
+      reminderRect,
+    ]) {
       if (!r) continue;
       rects.unshift([r.x - 16, r.y - 16, r.w + 32, r.h + 32]);
     }
@@ -1154,6 +1589,7 @@ export default function App() {
     scrollPx,
     helpRect,
     dlgRects,
+    reminderRect,
   ]);
 
   // ---------- Dock 放大联动（macOS Dock 风格） ----------
@@ -1178,9 +1614,36 @@ export default function App() {
     }
   }, [size]);
 
+  // 悬停态（点击穿透态补位）：窗口未占用（命中区外）时 WebView 收不到鼠标事件，
+  // CSS :hover 不触发——卡片不弹【关闭】按钮、入口图片不放大。这里用钩子转发的
+  // 坐标直接判定命中并挂 .hook-hover class，让这些 hover 样式在穿透态同样生效；
+  // 窗口被命中区占用后真实鼠标事件到达，:hover 与 .hook-hover 并存，视觉一致。
+  // 不改变穿透策略：是否占用窗口仍由原生钩子按命中区决定，这里只补样式反馈。
+  const applyHover = useCallback(() => {
+    const mx = mouseRef.current;
+    const my = mouseYRef.current;
+    const hit = (el: HTMLElement) => {
+      if (mx == null || my == null) return false;
+      const r = el.getBoundingClientRect();
+      return mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom;
+    };
+    for (const s of slotsRef.current) {
+      const card = s.el.querySelector<HTMLElement>(".card");
+      if (card) card.classList.toggle("hook-hover", hit(card));
+      // 入口卡片：左右两张图各自判定（移入哪张放大哪张）
+      s.el.querySelectorAll<HTMLElement>(".entry-img-btn").forEach((btn) => {
+        btn.classList.toggle("hook-hover", hit(btn));
+      });
+    }
+  }, []);
+
   // 布局变化（增删卡片 / 滚轮回看 / 尺寸档位 / 显示隐藏）后重建卡片索引
   useEffect(() => {
-    if (!revealed) mouseRef.current = null; // 面板隐藏时清状态，下次唤出从原始大小开始
+    if (!revealed) {
+      // 面板隐藏时清状态，下次唤出从原始大小开始（悬停态一并清除）
+      mouseRef.current = null;
+      mouseYRef.current = null;
+    }
     // 感应区底部：卡片区（含衣夹）下沿 + 14px 余量；低于此不触发（条带下半空白区）
     zoneBottomRef.current =
       ROPE_TOP + sag(width) - PIN_ABOVE + 26 + photoMaxHeight(size) + 14 + NAME_SECOND_LINE;
@@ -1190,25 +1653,38 @@ export default function App() {
       panel.querySelectorAll<HTMLElement>(".pegged-slot"),
     ).map((el) => ({ el, x: parseFloat(el.dataset.x || "0") }));
     applyDock();
-  }, [items, width, size, scrollPx, revealed, applyDock]);
+    applyHover(); // 布局变化 / 隐藏：悬停态同步重置
+  }, [items, width, size, scrollPx, revealed, applyDock, applyHover]);
 
   useEffect(() => {
     const un = listen<[number, number] | null>("panel-mouse", (e) => {
       const p = e.payload;
-      mouseRef.current = p && p[1] <= zoneBottomRef.current ? p[0] : null;
+      const inZone = !!p && p[1] <= zoneBottomRef.current;
+      mouseRef.current = inZone ? p[0] : null;
+      mouseYRef.current = inZone ? p[1] : null;
       applyDock();
+      applyHover();
     });
     return () => {
       un.then((f) => f());
     };
-  }, [applyDock]);
+  }, [applyDock, applyHover]);
+
+  // 待办卡片渲染用的查找表（按 id）
+  const todoMap = new Map(todos.map((t) => [t.id, t]));
+  // 当前提醒对应的待办（绳子未唤出时也能算「稍后」上限）
+  const remTodo = reminder ? todoMap.get(reminder.todoId) ?? null : null;
+  const remMaxSnooze = remTodo?.endAt
+    ? Math.max(1, Math.floor((remTodo.endAt - Date.now()) / 60000))
+    : 60;
 
   return (
-    <div
-      ref={panelRef}
-      className={"panel" + (revealed ? "" : " hidden")}
-      style={{ height: panelH }}
-      onWheel={onWheel}
+    <>
+      <div
+        ref={panelRef}
+        className={"panel" + (revealed ? "" : " hidden")}
+        style={{ height: panelH }}
+        onWheel={onWheel}
       // macOS 交互时激活：捕获阶段最先执行，覆盖 panel 内全部子元素——
       // 左键（卡片单击/双击/拖出、夹子重排、关闭按钮、弹窗拖动）与
       // 右键（contextmenu，含右键按下产生的 pointerdown button=2）。
@@ -1244,6 +1720,7 @@ export default function App() {
             tilt={item.tilt}
             zIndex={entryZ}
             onNote={onNoteEntryClick}
+            onTodo={onTodoEntryClick}
             onNotebook={onNotebookEntryClick}
           />
         ) : item.kind === "note" ? (
@@ -1260,6 +1737,33 @@ export default function App() {
             onRemove={(id) => removeItems([id])}
             falling={fallingIds.includes(item.id)}
           />
+        ) : item.kind === "todo" ? (
+          (() => {
+            const todo = todoMap.get(item.todoId ?? "");
+            if (!todo) return null;
+            return (
+              <TodoCard
+                key={item.id}
+                item={item}
+                todo={todo}
+                width={width}
+                size={size}
+                x={x}
+                reorder={isReorder}
+                onPinDown={startReorder}
+                onOpenDetail={(it) => it.todoId && setTodoDetailId(it.todoId)}
+                onEdit={(it) => it.todoId && editTodoCard(it.todoId)}
+                // 打勾完成：标记完成，同时把这张卡片从绳上取下
+                onToggleDone={(tid, cid) => {
+                  toggleTodoDone(tid);
+                  removeItems([cid]);
+                }}
+                onContextMenu={openCardMenu}
+                onRemove={(id) => removeItems([id])}
+                falling={fallingIds.includes(item.id)}
+              />
+            );
+          })()
         ) : (
           <PeggedCard
             key={item.id}
@@ -1287,17 +1791,46 @@ export default function App() {
           onFocus={() => bringToFront(editorKey(ed.noteId))}
         />
       ))}
+      {todoEditors.map((ed) => (
+        <TodoEditor
+          key={ed.todoId}
+          initial={ed.draft}
+          onRect={editorRectFor(`todo-${ed.todoId}`)}
+          onSubmit={(d) => submitTodo(ed.todoId, d)}
+          onClose={(d) => closeTodoEditor(ed.todoId, d)}
+          z={zMap[todoEditorKey(ed.todoId)] ?? 0}
+          onFocus={() => bringToFront(todoEditorKey(ed.todoId))}
+        />
+      ))}
+      {todoDetailId && todoMap.has(todoDetailId) && (
+        <TodoDetail
+          todo={todoMap.get(todoDetailId)!}
+          onRect={todoDetailRect}
+          onEdit={() => editTodoCard(todoDetailId)}
+          z={zMap[TODO_DETAIL_KEY] ?? 0}
+          onFocus={() => bringToFront(TODO_DETAIL_KEY)}
+          onClose={() => setTodoDetailId(null)}
+        />
+      )}
       {notebookOpen && (
         <Notebook
           notes={notes}
+          todos={todos}
           onRect={notebookRect}
           onCreate={createNote}
+          onCreateTodo={createTodo}
           onHang={hangNote}
           onTogglePin={togglePin}
           onReorder={reorderNote}
           onDelete={deleteNote}
           onEdit={editNoteText}
           onEditEnd={touchNote}
+          onHangTodo={hangTodo}
+          onTogglePinTodo={togglePinTodo}
+          onToggleDone={toggleTodoDone}
+          onReorderTodo={reorderTodo}
+          onDeleteTodo={deleteTodo}
+          onEditTodo={editTodoDraft}
           z={zMap[NOTEBOOK_KEY] ?? 0}
           onFocus={() => bringToFront(NOTEBOOK_KEY)}
           onClose={() => setNotebookOpen(false)}
@@ -1331,6 +1864,20 @@ export default function App() {
           </button>
         </div>
       )}
-    </div>
+      </div>
+      {/* 待办提醒消息：渲染在面板之外——面板收起时（.panel.hidden 有位移变换）
+          消息仍能固定在屏幕顶部，此时不展示拖拽绳子，只展示消息本身 */}      {reminder && remTodo && (
+        <TodoReminder
+          todo={remTodo}
+          kind={reminder.kind}
+          snoozeMin={snoozeMin}
+          maxSnooze={remMaxSnooze}
+          onSnoozeMin={setSnoozeMin}
+          onSnooze={() => snoozeReminder(reminder, snoozeMin)}
+          onClose={closeReminder}
+          onRect={reminderRectFor}
+        />
+      )}
+    </>
   );
 }

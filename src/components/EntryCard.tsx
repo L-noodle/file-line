@@ -3,6 +3,7 @@ import Clothespin from "./Clothespin";
 import { Spring } from "../spring";
 import {
   entryCardWidth,
+  entryImgHeight,
   REVEAL_BASE,
   ropeY,
   PIN_ABOVE,
@@ -17,12 +18,15 @@ interface Props {
   zIndex: number;
   /** 左图（便笺）：新增便笺 */
   onNote: (e: React.MouseEvent) => void;
+  /** 中图（待办）：新增待办 */
+  onTodo: (e: React.MouseEvent) => void;
   /** 右图（笔记本）：打开便笺管理器 */
   onNotebook: (e: React.MouseEvent) => void;
 }
 
 // 便笺管理入口卡片：与普通卡片同款视觉（衣夹 + 白边玻璃卡），
-// 卡面内左右两张图（便笺 / 笔记本）。常驻绳尾，只响应点击：
+// 卡面内三张图（便笺 / 待办 / 笔记本），两行摆放——笔记本被挤到第二行。
+// 常驻绳尾，只响应点击：
 // 不支持右键（吞掉原生菜单）、不能拖动 / 重排 / 取下。
 export default function EntryCard({
   width,
@@ -31,6 +35,7 @@ export default function EntryCard({
   tilt,
   zIndex,
   onNote,
+  onTodo,
   onNotebook,
 }: Props) {
   const rotRef = useRef<HTMLDivElement>(null);
@@ -82,6 +87,8 @@ export default function EntryCard({
         left: x - cw / 2,
         top: pinY,
         ["--card-w" as string]: `${cw}px`,
+        // 单张图高度：layout.ts 统一计算（含条带窗口容量钳制），CSS 直接取用
+        ["--entry-img-h" as string]: `${entryImgHeight(size)}px`,
         zIndex,
       }}
     >
@@ -99,6 +106,13 @@ export default function EntryCard({
                 onClick={onNote}
               >
                 <img src="/note.png" alt="新增便笺" draggable={false} />
+              </div>
+              <div
+                className="entry-img-btn"
+                title="新增待办"
+                onClick={onTodo}
+              >
+                <img src="/todo.png" alt="新增待办" draggable={false} />
               </div>
               <div
                 className="entry-img-btn"

@@ -38,9 +38,10 @@ export function spacing(size: SizeKey): number {
   return cardWidth(size) + CARD_GAP;
 }
 
-/** 卡片宽度（按类型）：普通 / 便笺 / 便笺管理入口 */
+/** 卡片宽度（按类型）：普通 / 便笺 / 待办 / 便笺管理入口 */
 export function itemWidth(kind: Item["kind"], size: SizeKey): number {
   if (kind === "note") return noteCardWidth(size);
+  if (kind === "todo") return todoCardWidth(size);
   if (kind === "entry") return entryCardWidth(size);
   return cardWidth(size);
 }
@@ -60,8 +61,8 @@ export function pitchBetween(
 //   noteWidth / 2 + 0.6·cardWidth ≤ spacing = cardWidth + 24
 // → noteWidth ≤ 0.8·cardWidth + 48。这里再留约 8px 呼吸位（0.78 + 40），
 // 保证鼠标移入邻居放大时也不会和便笺叠在一起。
-// 便笺自身也参与 Dock 放大，但上限仅 WIDE_DOCK_MAX（1.06）——
-// 幅度小到碰不到邻居，又保留了移入反馈（入口卡片同理）。
+// 便笺自身也参与 Dock 放大，上限 WIDE_DOCK_MAX（1.12）——
+// 低于普通卡的 DOCK_MAX，扫过邻居时两者不会贴上（入口卡片同理）。
 export function noteCardWidth(size: SizeKey): number {
   const cw = cardWidth(size);
   return Math.round(Math.min(cw * 1.3, cw * 0.78 + 40));
@@ -72,21 +73,46 @@ export function noteCardHeight(size: SizeKey): number {
 }
 
 // ---------- 便笺管理入口卡片 ----------
-// 常驻绳尾（最右）的入口卡片：卡面内左右两张图（便笺 / 笔记本）。
-// 宽度沿用便笺卡片公式——要比普通卡片宽才放得下两张图，同时满足
-// 不给 Dock 放大的邻居压到（同 noteCardWidth 的约束推导）。
+// 常驻绳尾（最右）的入口卡片：卡面内三张图（便笺 / 待办 / 笔记本），
+// 两行摆放（便笺 + 待办在第一行，笔记本被挤到第二行）。
+// 宽度在便笺卡片公式基础上再收窄 10px——三图两行后观感更紧凑，
+// 同时仍满足不给 Dock 放大的邻居压到（比便笺更窄，约束更宽松）。
 export function entryCardWidth(size: SizeKey): number {
+  return noteCardWidth(size) - 10;
+}
+
+// 入口卡单张图的显示高度：半宽 × 便笺素材高宽比（217 / 191）再减 14px
+// 呼吸位，并钳到条带窗口容量内——三张图两行摆放后卡更高，命中区口径
+// （26 + 卡高×1.12 + 36）不得超出窗口，否则大档下卡片底部被窗口裁掉、
+// 命中区还会吞掉窗口外的点击。
+// ⚠️ 按便笺卡宽度（noteCardWidth）推导而非 entryCardWidth：入口卡整体
+// 收窄 10px 时只收卡体，图标大小与卡片高度保持不变（收窄后每格仍放得下）
+export function entryImgHeight(size: SizeKey): number {
+  const natural = ((noteCardWidth(size) - 34) / 2) * (217 / 191) - 14;
+  // 卡高 = 2×图高 + 行间距 8 + 木框 26 → 图高 ≤ (命中区上限 − 34) / 2
+  const cap = (panelHeight(size) - 62) / 1.12 / 2 - 17;
+  return Math.max(20, Math.min(natural, cap));
+}
+
+// 高度 = 木框 + 相纸内衬 + 两行图高 + 行间距。
+// 每行两格，格宽 = (卡宽 - 木框相纸 26 - 图间距 8) / 2；
+// 三张图统一按 entryImgHeight 的高度摆放（横版的笔记本图同高居中，
+// 宽度自然更窄）。--card-w 口径与 .entry-card / .entry-imgs 的
+// padding（木框 8 + 相纸 5、图间距 8）对齐
+export function entryCardHeight(size: SizeKey): number {
+  const framePad = (8 + 5) * 2;
+  return Math.round(entryImgHeight(size) * 2 + 8 + framePad);
+}
+
+// ---------- 待办卡片 ----------
+// 展示标题 + 内容预览：宽度与便笺同口径（同一套 Dock 放大约束），
+// 高度在便笺基础上再留出标题与几行内容的余量
+export function todoCardWidth(size: SizeKey): number {
   return noteCardWidth(size);
 }
 
-// 高度 = 木框 + 相纸内衬 + 图高。右图按半宽正方形估算；左图（竖版便笺）
-// 比自然高再矮 14px（见 .entry-img-btn:first-child img），估算值偏大一点，
-// 命中区本来就有余量，不影响点击。--card-w 口径与 .entry-card /
-// .entry-imgs 的 padding（木框 8 + 相纸 5、图间距 8）对齐
-export function entryCardHeight(size: SizeKey): number {
-  const framePad = (8 + 5) * 2;
-  const img = (entryCardWidth(size) - framePad - 8) / 2;
-  return Math.round(img + framePad);
+export function todoCardHeight(size: SizeKey): number {
+  return Math.round(noteCardHeight(size) * 1.05);
 }
 
 // 条带窗口高度（也是鼠标钩子判定「在条带内」的边界）。必须容得下：
@@ -160,11 +186,13 @@ export const DOCK_MAX = 1.2; // 正下方普通卡片的最大放大倍数
 export const DOCK_RANGE = 2.5; // 影响半径（间距倍数）
 export const DOCK_SIGMA = 0.85; // 高斯衰减宽度（间距倍数）
 
-/** 宽卡片（便笺 / 便笺管理入口）的放大上限：压低到 1.06，
- *  幅度小到碰不到邻居（间隙分析见「便笺卡片」一节），又保留移入反馈。
+/** 宽卡片（便笺 / 便笺管理入口）的放大上限：1.12（普通卡为 DOCK_MAX 1.2）。
  *  这份反馈不能没有：CSS :hover 在点击穿透态收不到鼠标事件，
- *  只有钩子转发的 --dock 变量能驱动动画（其它卡片的悬浮感也来自它）。 */
-export const WIDE_DOCK_MAX = 1.06;
+ *  只有钩子转发的 --dock 变量能驱动动画（其它卡片的悬浮感也来自它）。
+ *  上限经碰撞验证：鼠标扫过宽卡与邻居之间时两者同时放大，取全程最小边缘
+ *  间隙——宽|宽 10.9 / 8.0 / 5.3px（小 / 中 / 大档），不劣于普通卡自己的
+ *  11.3 / 7.0 / 2.8px；若放到 1.2，大档宽|宽仅剩 1.8px 会显得贴住，故取 1.12。 */
+export const WIDE_DOCK_MAX = 1.12;
 
 /** 高斯衰减缩放：距离 0 → max，超出 RANGE → 1。 */
 function gaussScale(dist: number, spacingPx: number, max: number): number {

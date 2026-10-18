@@ -9,10 +9,11 @@ export interface ThumbInfo {
   error?: string;
 }
 
-/** 持久化卡片：文件卡片带 path，便笺卡片只带 noteId（正文在 notes 里） */
+/** 持久化卡片：文件卡片带 path，便笺卡片只带 noteId，待办卡片只带 todoId */
 export type SavedItem =
   | { path: string; source: "drag" | "clip" }
-  | { noteId: string };
+  | { noteId: string }
+  | { todoId: string };
 
 /** 另存为时落地的便笺 txt */
 export interface NoteFile {
@@ -24,16 +25,35 @@ interface SavedNote {
   id: string;
   text: string;
   updatedAt: number;
+  createdAt?: number;
+  pinned?: boolean;
+}
+
+export interface SavedTodo {
+  id: string;
+  title: string;
+  text: string;
+  startAt: number;
+  endAt: number;
+  repeat: boolean;
+  remindStart: number | null;
+  remindEnd: number | null;
+  done: boolean;
+  updatedAt: number;
+  createdAt?: number;
   pinned?: boolean;
 }
 
 export const api = {
   getState: () =>
-    invoke<{ items: SavedItem[]; size: string | null; notes?: SavedNote[] }>(
-      "get_state"
-    ),
-  saveState: (items: SavedItem[], notes: SavedNote[]) =>
-    invoke<void>("save_state", { items, notes }),
+    invoke<{
+      items: SavedItem[];
+      size: string | null;
+      notes?: SavedNote[];
+      todos?: SavedTodo[];
+    }>("get_state"),
+  saveState: (items: SavedItem[], notes: SavedNote[], todos: SavedTodo[]) =>
+    invoke<void>("save_state", { items, notes, todos }),
   openPath: (path: string) => invoke<void>("open_path", { path }),
   showInFolder: (path: string) => invoke<void>("show_in_folder", { path }),
   saveToFolder: (paths: string[], folder: string, notes: NoteFile[]) =>
@@ -50,6 +70,8 @@ export const api = {
   ) => invoke<void>("set_hit_rects", { rects, panelH, scrollable }),
   showRope: () => invoke<void>("show_rope"),
   hideRope: () => invoke<void>("hide_rope"),
+  /** 待办提醒：只显示窗口（不唤出绳子），仅展示提醒消息本身 */
+  showReminderWindow: () => invoke<void>("show_reminder_window"),
   activateApp: () => invoke<void>("activate_app"),
   makeThumb: (path: string, maxPx: number) =>
     invoke<ThumbInfo>("make_thumb", { path, maxPx }),

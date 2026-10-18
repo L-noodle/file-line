@@ -37,6 +37,7 @@
   - **Double-click**: Open with the default application
   - **Hold and drag out**: Drop into chat windows, the desktop, or anywhere else
   - **Right-click menu**: Open / Open containing folder / Remove / Remove all to the left / Remove all to the right / Save as / Clear the line
+- **Todo cards**: New todos are hung on the line. Hover a card to check it done / undo it; done cards turn gray with a strikethrough.
 - **Tray**: Double-click the tray icon to show/hide the line. Right-click the tray menu to enable auto-start, switch card size (Small / Medium / Large), or quit.
 - **Auto-hide**: Slides off-screen when idle and reappears when you hover near the top of the screen. It also pops out instantly when you're dragging files toward the top.
 - **Persistent state**: The card list is saved automatically and restored exactly as it was when you relaunch the app.
@@ -115,6 +116,7 @@ After the build completes, the artifacts are located at:
 | Hold and drag a card outward | Drop it into a chat window or editor as a file |
 | Right-click a card | Open, locate, remove, save all as, etc. |
 | Hover the × at the top-right of a card | Remove that card |
+| Hover a todo card | Check it done / undo it; done cards turn gray with a strikethrough |
 
 ### Browsing History
 

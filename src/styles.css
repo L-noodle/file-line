@@ -396,7 +396,10 @@ html[data-theme="dark"] .card-name {
   transition: transform 0.2s ease;
   z-index: 5;
 }
+/* .hook-hover：钩子转发坐标判定的悬停。点击穿透态（窗口未占用）下 WebView
+   收不到鼠标事件，CSS :hover 不触发，由 App 的 applyHover 按坐标挂 class 补位 */
 .card:hover .card-x,
+.card.hook-hover .card-x,
 .card-x:focus-visible {
   transform: scale(1);
 }
@@ -413,6 +416,44 @@ html[data-theme="dark"] .card-x:hover {
 }
 .card-x svg {
   stroke-width: 3;
+}
+
+/* 卡片右上角打勾按钮（待办卡片：完成），在取消按钮左侧，绿色 icon */
+.card-check {
+  position: absolute;
+  top: 3px;
+  right: 27px; /* 取消按钮（22px 宽 + 3px 边距）左侧 */
+  width: 22px;
+  height: 22px;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  color: #1f9d3f;
+  cursor: pointer;
+  transform: scale(0);
+  transition: transform 0.2s ease;
+  z-index: 6;
+}
+/* 与 .card-x 同理：:hover / .hook-hover（穿透态补位）才显示 */
+.card:hover .card-check,
+.card.hook-hover .card-check,
+.card-check:focus-visible {
+  transform: scale(1);
+}
+.card-check:hover {
+  background: #eafbee;
+}
+html[data-theme="dark"] .card-check {
+  background: #3a3a41;
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #3ecf62;
+}
+html[data-theme="dark"] .card-check:hover {
+  background: #26402c;
 }
 
 /* 复制提示：卡片内部底部居中 */
@@ -881,17 +922,22 @@ html[data-theme="dark"] .help-v {
 /* 卡面沿用 .card 的白边相框，正文区单独画成便签纸 */
 .note-card {
   align-items: stretch;
+  /* 默认投影与其它卡片一致：.card 基类不带阴影，普通卡的这份来自 .glass，
+     入口卡来自 .entry-card 的显式书写；便笺卡不走 .glass（要保留自己的纸面
+     底板与暗色实色底），这里单独补上。hover 时由 .card:hover 换成 hover 档 */
+  box-shadow: var(--shadow-card);
 }
 html[data-theme="dark"] .note-card {
   /* 卡面底板改实色：.card 暗色底只有 80% 不透明度，便笺纸周围那圈
      相框会透出桌面（透明窗口），与弹窗底板同样处理 */
   background: #2b2b30;
 }
-/* 便笺 / 入口卡片（比普通卡宽）：也参与 Dock 放大，但上限由前端写入的
-   --dock-wide 控制（≈1.06，见 layout.ts WIDE_DOCK_MAX）——幅度小到碰不到
+/* 便笺 / 待办 / 入口卡片（比普通卡宽）：也参与 Dock 放大，但上限由前端写入的
+   --dock-wide 控制（≈1.12，见 layout.ts WIDE_DOCK_MAX）——幅度小到碰不到
    邻居，又保证点击穿透态（窗口未占用）下也有移入反馈：CSS :hover 在穿透态
    收不到鼠标事件，只有钩子转发的变量能驱动动画 */
 .note-slot .pegged-dock,
+.todo-slot .pegged-dock,
 .entry-slot .pegged-dock {
   transform: scale(var(--dock-wide, 1));
 }
@@ -937,10 +983,75 @@ html[data-theme="dark"] .note-card {
 /* 深色下便签纸保持黄色（拟真，同 Apple 备忘录）：纸面 / 横线 / 文字
    一律沿用上面的浅色值，不做暗化处理 */
 
+/* ---------- 待办卡片（挂绳上，只展示标题） ---------- */
+/* 卡面沿用 .card 的白边相框，标题区画成绿色便签纸（与待办入口图同色系） */
+.todo-card {
+  align-items: stretch;
+  /* 同 .note-card：便笺卡不走 .glass，这里单独补默认投影 */
+  box-shadow: var(--shadow-card);
+}
+html[data-theme="dark"] .todo-card {
+  /* 卡面底板改实色：透明窗口下相框不透出桌面 */
+  background: #2b2b30;
+}
+.todo-text {
+  position: relative;
+  width: 100%;
+  height: var(--todo-h);
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: linear-gradient(160deg, #f3fbe9 0%, #e2f4d2 100%);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.12);
+  color: #2f4a1e;
+  overflow: hidden;
+  /* 标题在上、内容在下，内容区吃掉剩余高度 */
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.todo-title {
+  flex: none;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+/* 内容预览：最多 4 行，超出省略 */
+.todo-body {
+  flex: 1;
+  min-height: 0;
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: #4a6b3a;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+}
+/* 已完成：置灰 + 删除线 */
+.todo-card.done .todo-text {
+  opacity: 0.55;
+}
+.todo-card.done .todo-title {
+  text-decoration: line-through;
+}
+/* 深色下便签纸保持绿色（拟真，同便笺黄纸处理），不做暗化 */
+
 /* ---------- 便笺管理入口卡片（常驻绳尾，只响应点击） ---------- */
-/* 卡面内左右两张图：便笺 / 笔记本；放大上限同便笺卡片（见上方
-   .note-slot / .entry-slot 共用规则） */
-/* 木框：暖棕渐变 + 细密斜纹（木纤维），内衬相纸托住两张图 */
+/* 卡面内三张图：便笺 / 待办 / 笔记本，两行摆放（笔记本被挤到第二行）；
+   放大上限同便笺卡片（见上方 .note-slot / .entry-slot 共用规则） */
+/* 木框：暖棕渐变 + 细密斜纹（木纤维），内衬相纸托住三张图 */
 .entry-card {
   border: none;
   padding: 8px;
@@ -962,6 +1073,7 @@ html[data-theme="dark"] .note-card {
 }
 .entry-imgs {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 8px;
@@ -971,8 +1083,9 @@ html[data-theme="dark"] .note-card {
   background: linear-gradient(145deg, #fdfdfe 55%, #eef1f8 100%);
   box-shadow: inset 0 1px 2px rgba(96, 60, 26, 0.22);
 }
+/* 三张图两行：每行两格（各 50% - 半个间距），第三张（笔记本）换行居中 */
 .entry-img-btn {
-  flex: 1;
+  flex: 0 0 calc(50% - 4px);
   min-width: 0;
   display: flex;
   align-items: center;
@@ -980,24 +1093,22 @@ html[data-theme="dark"] .note-card {
   border-radius: 8px;
   cursor: pointer;
 }
+/* 三张图统一高度：由 layout.ts 的 entryImgHeight 计算（半宽 × 便笺素材
+   高宽比 217 / 191 再减 14px 呼吸位，并钳到条带窗口容量内），
+   通过 --entry-img-h 下发（与 entryCardHeight 命中区口径保持一致） */
 .entry-img-btn img {
-  width: 100%;
-  height: auto;
+  width: auto;
+  max-width: 100%;
+  height: var(--entry-img-h, calc((var(--card-w) - 34px) / 2 * 217 / 191 - 14px));
   object-fit: contain;
-  border-radius: 6px;
+  /* 图标不切圆角，保留素材原始轮廓 */
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.2));
   transition: transform 0.18s ease;
 }
-.entry-img-btn:hover img {
+/* 与 .card-x 同理：:hook-hover 为穿透态补位（App.applyHover 按钩子坐标挂 class） */
+.entry-img-btn:hover img,
+.entry-img-btn.hook-hover img {
   transform: scale(1.1);
-}
-/* 左图（竖版便笺 note.png，素材 191×217）：等比缩放后高度再矮 14px。
-   ⚠️ 更换便笺素材图时，需同步下面的高宽比 217 / 191 */
-.entry-img-btn:first-child img {
-  width: auto;
-  max-width: 100%;
-  /* 半宽 × 素材高宽比 = 自然高，再减 14px */
-  height: calc((var(--card-w) - 34px) / 2 * 217 / 191 - 14px);
 }
 /* 暗色：木色压深，相纸换深色衬底 */
 html[data-theme="dark"] .entry-card {
@@ -1112,6 +1223,13 @@ html[data-theme="dark"] .entry-slot .clothespin {
   color: #a2904a;
 }
 /* 同 .note-text：深色下便签纸保持黄色，不暗化 */
+
+/* 折叠堆叠里的待办预览：绿色纸面（与绳上待办卡一致），只展示标题 */
+.card-tile.todo .note-mini {
+  background: linear-gradient(160deg, #f3fbe9 0%, #e2f4d2 100%);
+  color: #2f4a1e;
+  font-weight: 600;
+}
 
 /* 折叠堆叠里的入口卡片预览（左右两张小图，木色衬底与绳上卡片一致） */
 .card-tile.entry {
@@ -1619,4 +1737,384 @@ html[data-theme="dark"] .nb-text {
 html[data-theme="dark"] .nb-placeholder,
 html[data-theme="dark"] .nb-empty {
   color: #8e8e98;
+}
+
+/* ---------- 待办编辑弹窗（创建 / 编辑共用同一套字段） ---------- */
+.todo-editor-body {
+  padding: 12px 14px;
+}
+.todo-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.todo-fld {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.todo-fld-row {
+  display: flex;
+  gap: 10px;
+}
+.todo-fld-row > .todo-fld {
+  flex: 1;
+  min-width: 0;
+}
+.todo-lbl {
+  font-size: 12px;
+  color: #777;
+}
+.todo-input {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(120, 96, 30, 0.3);
+  background: #fff;
+  color: #222;
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.todo-input::placeholder {
+  color: #aaa;
+}
+.todo-input:focus {
+  border-color: #a87c10;
+  box-shadow: 0 0 0 3px rgba(168, 124, 16, 0.16);
+}
+.todo-ta {
+  height: 96px;
+  resize: none;
+  line-height: 1.6;
+}
+/* 是否重复 */
+.todo-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #333;
+  cursor: pointer;
+}
+/* 开始前 / 结束前提醒：勾选框 + 分钟数输入 */
+.todo-rem {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: #555;
+}
+.todo-rem input[type="checkbox"],
+.todo-check-row input[type="checkbox"] {
+  accent-color: #1f9d3f;
+  cursor: pointer;
+}
+.todo-rem label {
+  cursor: pointer;
+  white-space: nowrap;
+}
+.todo-num {
+  width: 58px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  border: 1px solid rgba(120, 96, 30, 0.3);
+  background: #fff;
+  color: #222;
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: center;
+  outline: none;
+}
+.todo-num:focus {
+  border-color: #a87c10;
+  box-shadow: 0 0 0 3px rgba(168, 124, 16, 0.16);
+}
+.todo-num:disabled {
+  opacity: 0.45;
+}
+.todo-unit {
+  color: #999;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* ---------- 待办详情弹窗（只展示标题和内容） ---------- */
+.todo-detail-body {
+  padding: 14px 16px;
+}
+.todo-detail-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #222;
+  margin-bottom: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.todo-detail-text {
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: #333;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+html[data-theme="dark"] .todo-detail-title {
+  color: #f0f0f2;
+}
+html[data-theme="dark"] .todo-detail-text {
+  color: #d8d8dc;
+}
+
+/* ---------- 待办提醒消息（到点顶部弹出，只展示消息本身） ---------- */
+/* 渲染在 .panel 之外：面板收起时（.panel.hidden 有位移变换）消息仍固定顶部 */
+.reminder-wrap {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1400; /* 压过全部弹窗（1250+） */
+  pointer-events: none; /* 只让消息本体可点，四周保持穿透 */
+  animation: reminderIn 0.3s cubic-bezier(0.2, 1.2, 0.4, 1) both;
+}
+@keyframes reminderIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+.reminder-card {
+  pointer-events: auto;
+  width: min(520px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* 顶部栏：待办标题（左）+ 关闭按钮（右），底部分隔线与内容区分开 */
+.reminder-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.18);
+}
+.reminder-title {
+  display:flex;
+  gap: 10px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #222;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 中部：内容（时间说明 + 正文） */
+.reminder-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* 底部：稍后 N 分钟再次提醒（N 可改，不超过结束时间） */
+.reminder-foot {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: none;
+  padding-top: 10px;
+  border-top: 1px solid rgba(127, 127, 127, 0.18);
+}
+.reminder-lbl {
+  font-size: 12px;
+  color: #666;
+  white-space: nowrap;
+}
+.reminder-num {
+  width: 52px;
+  padding: 4px 6px;
+  border-radius: 7px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  background: #fff;
+  color: #222;
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: center;
+  outline: none;
+}
+.reminder-num:focus {
+  border-color: #1f9d3f;
+  box-shadow: 0 0 0 3px rgba(31, 157, 63, 0.18);
+}
+.reminder-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #1f9d3f;
+  color: #fff;
+  white-space: nowrap;
+}
+.reminder-btn:hover {
+  background: #1a8a37;
+}
+.reminder-btn.ghost {
+  background: #fff;
+  color: #555;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  padding: 5px 7px;
+}
+.reminder-btn.ghost:hover {
+  background: #f0f0f0;
+}
+.reminder-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #333;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 28vh;
+  overflow: auto;
+}
+.reminder-meta {
+  font-size: 11.5px;
+  color: #888;
+}
+html[data-theme="dark"] .reminder-title {
+  color: #f0f0f2;
+}
+html[data-theme="dark"] .reminder-text {
+  color: #d8d8dc;
+}
+html[data-theme="dark"] .reminder-lbl {
+  color: #a6a6ae;
+}
+html[data-theme="dark"] .reminder-meta {
+  color: #8a8a92;
+}
+html[data-theme="dark"] .reminder-num {
+  background: #3a3a41;
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #eee;
+}
+html[data-theme="dark"] .reminder-btn.ghost {
+  background: #3a3a41;
+  color: #eee;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+html[data-theme="dark"] .reminder-btn.ghost:hover {
+  background: #4a4a52;
+}
+
+/* ---------- 笔记本 Tab（全部 / 便笺 / 待办） ---------- */
+.nb-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px 2px 8px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* 与列表顶部底色一致（.wdlg-body 渐变上沿） */
+  background: #fdfdfe;
+}
+.nb-tab {
+  flex: 1;
+  border: none;
+  border-radius: 7px;
+  padding: 5px 0;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: #666;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+.nb-tab:hover {
+  background: rgba(168, 124, 16, 0.1);
+}
+.nb-tab.on {
+  background: rgba(168, 124, 16, 0.18);
+  color: #6b4e0b;
+  font-weight: 600;
+}
+/* 行首类型徽标（全部 Tab 区分便笺 / 待办） */
+.nb-kind {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(120, 96, 30, 0.12);
+  color: #777;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.nb-kind.todo {
+  background: rgba(31, 157, 63, 0.14);
+  color: #1f7a34;
+}
+/* 待办行左侧勾选框（完成 / 取消完成） */
+.nb-check {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1.5px solid rgba(120, 96, 30, 0.4);
+  background: #fff;
+  color: transparent;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
+}
+.nb-check:hover {
+  border-color: #1f9d3f;
+}
+.nb-check.on {
+  background: #1f9d3f;
+  border-color: #1f9d3f;
+  color: #fff;
+}
+/* 已完成的待办：置灰 + 删除线 */
+.nb-row.done .nb-row-text {
+  color: #aaa;
+  text-decoration: line-through;
+}
+.nb-row.done .nb-row-time {
+  color: #b5b5b5;
+}
+/* 不可拖拽的行（全部 Tab / 已完成待办）：占位把手保持行首对齐 */
+.nb-grip.empty {
+  cursor: default;
+  pointer-events: none;
+}
+/* 右侧待办编辑面板（与创建弹窗同一套字段） */
+.nb-todo-edit {
+  height: 100%;
+  overflow: auto;
 }
