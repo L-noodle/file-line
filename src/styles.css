@@ -1074,24 +1074,42 @@ html[data-theme="dark"] .todo-card {
 .entry-imgs {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
+  align-items: stretch;
+  gap: 2px;
   width: 100%;
-  padding: 5px;
+  padding: 0;
   border-radius: 9px;
-  background: linear-gradient(145deg, #fdfdfe 55%, #eef1f8 100%);
-  box-shadow: inset 0 1px 2px rgba(96, 60, 26, 0.22);
+  background: #DFDDE2;
 }
-/* 三张图两行：每行两格（各 50% - 半个间距），第三张（笔记本）换行居中 */
+/* 四张图两行：每行两格（各 50% - 半个间距），第二行为 倒计时 + 笔记本；
+   四格撑满内容区，仅在卡片之间留 4px 露出底色，各自带底色 + 1px 边框，切角拼成一个大圆角框 */
 .entry-img-btn {
-  flex: 0 0 calc(50% - 4px);
+  flex: 0 0 calc(50% - 1px);
   min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  padding: 6px;
+  background: #FEFEFE;
+  border: 1px solid #C4BFBF;
   cursor: pointer;
+}
+/* 第 1 格：左上不切圆角（便笺） */
+.entry-img-btn:nth-child(1) {
+  border-radius: 8px 4px 4px 4px;
+}
+/* 第 2 格：右上不切圆角（待办） */
+.entry-img-btn:nth-child(2) {
+  border-radius: 4px 8px 4px 4px;
+}
+/* 第 3 格：右下不切圆角（倒计时） */
+.entry-img-btn:nth-child(3) {
+  border-radius: 4px 4px 4px 8px;
+}
+/* 第 4 格：左下不切圆角（笔记本），底色左上→右下渐变至淡棕 */
+.entry-img-btn:nth-child(4) {
+  border-radius: 4px 4px 8px 4px;
+  background: linear-gradient(-45deg, #FEFEFE 0%, #e3c7a4 100%);
 }
 /* 三张图统一高度：由 layout.ts 的 entryImgHeight 计算（半宽 × 便笺素材
    高宽比 217 / 191 再减 14px 呼吸位，并钳到条带窗口容量内），
@@ -1128,8 +1146,10 @@ html[data-theme="dark"] .entry-card {
     inset -1px 0 0 rgba(30, 16, 6, 0.4);
 }
 html[data-theme="dark"] .entry-imgs {
-  background: linear-gradient(145deg, #3a3a41 55%, #2b2b30 100%);
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+html[data-theme="dark"] .entry-img-btn {
+  background: #FEFEFE;
 }
 /* 木夹子：仅入口卡片使用（其它卡片保持玻璃夹） */
 .entry-slot .clothespin {
@@ -1226,6 +1246,13 @@ html[data-theme="dark"] .entry-slot .clothespin {
 
 /* 折叠堆叠里的待办预览：绿色纸面（与绳上待办卡一致），只展示标题 */
 .card-tile.todo .note-mini {
+  background: linear-gradient(160deg, #f3fbe9 0%, #e2f4d2 100%);
+  color: #2f4a1e;
+  font-weight: 600;
+}
+
+/* 折叠堆叠里的倒计时预览：与待办同款绿纸 + 左侧橙色竖条区分 */
+.card-tile.todo.countdown .note-mini {
   background: linear-gradient(160deg, #f3fbe9 0%, #e2f4d2 100%);
   color: #2f4a1e;
   font-weight: 600;
@@ -1875,9 +1902,7 @@ html[data-theme="dark"] .todo-detail-text {
 /* 渲染在 .panel 之外：面板收起时（.panel.hidden 有位移变换）消息仍固定顶部 */
 .reminder-wrap {
   position: fixed;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
+  /* 位置由组件内联控制（初始屏幕顶部居中，支持拖拽） */
   z-index: 1400; /* 压过全部弹窗（1250+） */
   pointer-events: none; /* 只让消息本体可点，四周保持穿透 */
   animation: reminderIn 0.3s cubic-bezier(0.2, 1.2, 0.4, 1) both;
@@ -1885,11 +1910,11 @@ html[data-theme="dark"] .todo-detail-text {
 @keyframes reminderIn {
   from {
     opacity: 0;
-    transform: translate(-50%, -12px);
+    transform: translateY(-12px);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: none;
   }
 }
 .reminder-card {
@@ -2072,6 +2097,39 @@ html[data-theme="dark"] .reminder-btn.ghost:hover {
 .nb-kind.todo {
   background: rgba(31, 157, 63, 0.14);
   color: #1f7a34;
+}
+.nb-kind.countdown {
+  background: rgba(178, 91, 46, 0.14);
+  color: #b25b2e;
+}
+/* ---------- 倒计时卡片（绳上） ---------- */
+/* 卡面与待办等高：倒计时条占用上方内容预览的区域，内容预览收为 3 行 */
+.countdown-card .todo-body {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+/* 底部倒计时条：表盘 icon + 渐近剩余时间（只保留最大两档单位） */
+.countdown-card .countdown-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: auto;
+  padding-top: 4px;
+  border-top: 1px dashed rgba(60, 50, 40, 0.25);
+  color: #b25b2e;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.countdown-card .countdown-remaining {
+  font-size: 12px;
+  letter-spacing: 0.2px;
+}
+/* 已截止：整体变灰，不再倒数 */
+.countdown-card.expired .countdown-bar {
+  color: #9a9186;
+  opacity: 0.75;
 }
 /* 待办行左侧勾选框（完成 / 取消完成） */
 .nb-check {

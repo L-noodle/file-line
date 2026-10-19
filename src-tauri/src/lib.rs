@@ -101,6 +101,10 @@ enum PersistedItem {
         #[serde(alias = "todoId")]
         todo_id: String,
     },
+    Countdown {
+        #[serde(alias = "countdownId")]
+        countdown_id: String,
+    },
     Path(String),
 }
 
@@ -110,6 +114,7 @@ impl PersistedItem {
             PersistedItem::Full { path, .. } => Some(path),
             PersistedItem::Path(p) => Some(p),
             PersistedItem::Note { .. } | PersistedItem::Todo { .. } => None,
+            PersistedItem::Countdown { .. } => None,
         }
     }
     fn note_id(&self) -> Option<&str> {
@@ -121,6 +126,12 @@ impl PersistedItem {
     fn todo_id(&self) -> Option<&str> {
         match self {
             PersistedItem::Todo { todo_id } => Some(todo_id),
+            _ => None,
+        }
+    }
+    fn countdown_id(&self) -> Option<&str> {
+        match self {
+            PersistedItem::Countdown { countdown_id } => Some(countdown_id),
             _ => None,
         }
     }
@@ -183,6 +194,24 @@ struct NoteFile {
     text: String,
 }
 
+/// 倒计时（笔记本数据），与绳子上的卡片独立：卡片取下不影响倒计时本体。
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct PersistedCountdown {
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default, alias = "endAt")]
+    end_at: i64,
+    #[serde(default, alias = "updatedAt")]
+    updated_at: i64,
+    #[serde(default, alias = "createdAt")]
+    created_at: i64,
+    #[serde(default)]
+    pinned: bool,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct Persisted {
     #[serde(default)]
@@ -192,6 +221,8 @@ struct Persisted {
     notes: Vec<PersistedNote>,
     #[serde(default)]
     todos: Vec<PersistedTodo>,
+    #[serde(default)]
+    countdowns: Vec<PersistedCountdown>,
 }
 
 fn read_state(app: &AppHandle) -> Persisted {
@@ -219,6 +250,7 @@ fn get_state(app: AppHandle) -> serde_json::Value {
             "source": i.source(),
             "noteId": i.note_id(),
             "todoId": i.todo_id(),
+            "countdownId": i.countdown_id(),
         })).collect::<Vec<_>>(),
         "size": p.size,
         "notes": p.notes.iter().map(|n| serde_json::json!({
@@ -242,6 +274,15 @@ fn get_state(app: AppHandle) -> serde_json::Value {
             "createdAt": t.created_at,
             "pinned": t.pinned,
         })).collect::<Vec<_>>(),
+        "countdowns": p.countdowns.iter().map(|c| serde_json::json!({
+            "id": c.id,
+            "title": c.title,
+            "text": c.text,
+            "endAt": c.end_at,
+            "updatedAt": c.updated_at,
+            "createdAt": c.created_at,
+            "pinned": c.pinned,
+        })).collect::<Vec<_>>(),
     })
 }
 
@@ -251,6 +292,7 @@ fn save_state(
     items: Vec<PersistedItem>,
     notes: Vec<PersistedNote>,
     todos: Vec<PersistedTodo>,
+    countdowns: Vec<PersistedCountdown>,
 ) {
     let size = app.state::<AppState>().size.lock().unwrap().as_str().to_string();
     write_state(
@@ -260,6 +302,7 @@ fn save_state(
             size: Some(size),
             notes,
             todos,
+            countdowns,
         },
     );
 }
@@ -532,6 +575,16 @@ fn hide_rope(app: AppHandle) {
     }
 }
 
+/// 待办提醒展示期间绳子收起：不隐藏窗口、不缩回条带高度（提醒消息
+/// 要继续显示且窗口已临时全屏化），但与 hide_rope 同样复位顶部触发
+/// 状态，并保持 revealed=true（Windows 命中区捕获的门控，消息必须可点）。
+#[tauri::command]
+fn collapse_rope_keep_window(app: AppHandle) {
+    let _ = app;
+    mousehook::set_revealed(true);
+    mousehook::reset_triggers();
+}
+
 #[tauri::command]
 fn make_thumb(app: AppHandle, path: String, max_px: u32) -> serde_json::Value {
     match thumbs::make_thumb(&app, &path, max_px) {
@@ -623,6 +676,7 @@ pub fn run() {
             window_resized,
             show_rope,
             hide_rope,
+            collapse_rope_keep_window,
             show_reminder_window,
             activate_app,
             request_mac_permission
@@ -689,6 +743,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let note_open = MenuItem::with_id(app, "note-open", "打开笔记本", true, None::<&str>)?;
     // 待办入口：与便笺同款（新建待办 + 挂卡片 + 编辑窗）
     let todo_new = MenuItem::with_id(app, "todo-new", "新增待办", true, None::<&str>)?;
+    // 倒计时入口：与待办同款（新建倒计时 + 挂卡片 + 编辑窗）
+    let countdown_new = MenuItem::with_id(app, "countdown-new", "新增倒计时", true, None::<&str>)?;
     let sep = tauri::menu::PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
@@ -696,8 +752,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &note_new, &todo_new, &note_open, &sep, &help, &sep, &size_menu, &autostart, &sep,
-            &quit,
+            &note_new, &todo_new, &countdown_new, &note_open, &sep, &help, &sep, &size_menu,
+            &autostart, &sep, &quit,
         ],
     )?;
     drop(cur_size);
@@ -725,6 +781,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 "todo-new" => {
                     // 新增待办：前端建待办、挂卡片并弹出编辑窗
                     let _ = app.emit("tray-new-todo", ());
+                }
+                "countdown-new" => {
+                    // 新增倒计时：前端建倒计时、挂卡片并弹出编辑窗
+                    let _ = app.emit("tray-new-countdown", ());
                 }
                 "note-open" => {
                     // 打开笔记本（便笺管理器）

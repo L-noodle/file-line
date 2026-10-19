@@ -32,6 +32,14 @@ export default function CardContent({ item }: { item: Item }) {
       </div>
     );
   }
+  // 倒计时卡片（折叠堆叠里的预览）：只展示标题
+  if (item.kind === "countdown") {
+    return (
+      <div className="card-tile note todo countdown">
+        <div className="note-mini">{item.name || "（无标题）"}</div>
+      </div>
+    );
+  }
   if (item.thumb?.kind === "image" && item.thumb.b64) {
     return (
       <img

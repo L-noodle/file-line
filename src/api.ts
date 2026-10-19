@@ -9,11 +9,12 @@ export interface ThumbInfo {
   error?: string;
 }
 
-/** 持久化卡片：文件卡片带 path，便笺卡片只带 noteId，待办卡片只带 todoId */
+/** 持久化卡片：文件卡片带 path，便笺卡片只带 noteId，待办卡片只带 todoId，倒计时卡片只带 countdownId */
 export type SavedItem =
   | { path: string; source: "drag" | "clip" }
   | { noteId: string }
-  | { todoId: string };
+  | { todoId: string }
+  | { countdownId: string };
 
 /** 另存为时落地的便笺 txt */
 export interface NoteFile {
@@ -44,6 +45,16 @@ export interface SavedTodo {
   pinned?: boolean;
 }
 
+export interface SavedCountdown {
+  id: string;
+  title: string;
+  text: string;
+  endAt: number;
+  updatedAt: number;
+  createdAt?: number;
+  pinned?: boolean;
+}
+
 export const api = {
   getState: () =>
     invoke<{
@@ -51,9 +62,15 @@ export const api = {
       size: string | null;
       notes?: SavedNote[];
       todos?: SavedTodo[];
+      countdowns?: SavedCountdown[];
     }>("get_state"),
-  saveState: (items: SavedItem[], notes: SavedNote[], todos: SavedTodo[]) =>
-    invoke<void>("save_state", { items, notes, todos }),
+  saveState: (
+    items: SavedItem[],
+    notes: SavedNote[],
+    todos: SavedTodo[],
+    countdowns: SavedCountdown[]
+  ) =>
+    invoke<void>("save_state", { items, notes, todos, countdowns }),
   openPath: (path: string) => invoke<void>("open_path", { path }),
   showInFolder: (path: string) => invoke<void>("show_in_folder", { path }),
   saveToFolder: (paths: string[], folder: string, notes: NoteFile[]) =>
@@ -70,6 +87,8 @@ export const api = {
   ) => invoke<void>("set_hit_rects", { rects, panelH, scrollable }),
   showRope: () => invoke<void>("show_rope"),
   hideRope: () => invoke<void>("hide_rope"),
+  /** 待办提醒展示期间绳子收起：保持窗口显示（提醒继续展示），仅复位触发状态 */
+  collapseRopeKeepWindow: () => invoke<void>("collapse_rope_keep_window"),
   /** 待办提醒：只显示窗口（不唤出绳子），仅展示提醒消息本身 */
   showReminderWindow: () => invoke<void>("show_reminder_window"),
   activateApp: () => invoke<void>("activate_app"),

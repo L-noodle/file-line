@@ -38,7 +38,8 @@
   - **Hold and drag out**: Drop into chat windows, the desktop, or anywhere else
   - **Right-click menu**: Open / Open containing folder / Remove / Remove all to the left / Remove all to the right / Save as / Clear the line
 - **Todo cards**: New todos are hung on the line. Hover a card to check it done / undo it; done cards turn gray with a strikethrough.
-- **Tray**: Double-click the tray icon to show/hide the line. Right-click the tray menu to enable auto-start, switch card size (Small / Medium / Large), or quit.
+- **Countdown cards**: New countdowns are hung on the line with a live timer at the bottom that adaptively shows days / hours / minutes / seconds; once the deadline passes, the card turns gray and reads "已截止" (expired).
+- **Tray**: Double-click the tray icon to show/hide the line. Right-click the tray menu to create notes / todos, open the notebook, enable auto-start, switch card size (Small / Medium / Large), or quit.
 - **Auto-hide**: Slides off-screen when idle and reappears when you hover near the top of the screen. It also pops out instantly when you're dragging files toward the top.
 - **Persistent state**: The card list is saved automatically and restored exactly as it was when you relaunch the app.
 
@@ -103,6 +104,9 @@ After the build completes, the artifacts are located at:
 
 | Action | Description |
 | --- | --- |
+| New note | Create a note and hang it on the line, ready to write |
+| New todo | Create a todo and hang it on the line, set time and reminder |
+| Open notebook | Manage all notes / todos / countdowns (pin / hang / delete) |
 | Auto-start on boot | Launch with the system automatically |
 | Card size | Switch between Small / Medium / Large |
 
@@ -114,9 +118,12 @@ After the build completes, the artifacts are located at:
 | Double-click a card | Open with the default program |
 | Drag the clothespin on a card | Slide it left or right along the line to reorder |
 | Hold and drag a card outward | Drop it into a chat window or editor as a file |
+| Click the entry card at the far right | Left icon creates a note, middle creates a todo, lower row creates a countdown, right opens the notebook |
 | Right-click a card | Open, locate, remove, save all as, etc. |
 | Hover the × at the top-right of a card | Remove that card |
 | Hover a todo card | Check it done / undo it; done cards turn gray with a strikethrough |
+| Double-click a countdown card | Open the edit dialog (name / content / deadline); Ctrl + Enter to save |
+| Countdown timer bar | Refreshes every second and adaptively shows "Nd HH:MM:SS / Nh Nm Ns / Nm Ns"; turns gray with "已截止" (expired) after the deadline |
 
 ### Browsing History
 
@@ -124,6 +131,15 @@ After the build completes, the artifacts are located at:
 | --- | --- |
 | Scroll the wheel on the line | Slide left/right to see earlier cards |
 | Click the collapsed stacks at either end | Expand the list and jump to a specific card |
+
+### Countdown & Notebook
+
+| Action | Description |
+| --- | --- |
+| Entry card / notebook "New countdown" | Create a countdown, hang it on the line, and open the editor |
+| Notebook → Countdown tab | View all countdowns with live remaining time in each row |
+| Notebook → All tab | Notes / undone todos / countdowns interleaved by creation time |
+| Notebook right-side editor | Select a countdown to edit its name / content / deadline, saved in real time |
 
 ## FAQ
 

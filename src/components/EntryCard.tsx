@@ -22,6 +22,8 @@ interface Props {
   onTodo: (e: React.MouseEvent) => void;
   /** 右图（笔记本）：打开便笺管理器 */
   onNotebook: (e: React.MouseEvent) => void;
+  /** 第二行首图（倒计时）：新增倒计时 */
+  onCountdown: (e: React.MouseEvent) => void;
 }
 
 // 便笺管理入口卡片：与普通卡片同款视觉（衣夹 + 白边玻璃卡），
@@ -37,6 +39,7 @@ export default function EntryCard({
   onNote,
   onTodo,
   onNotebook,
+  onCountdown,
 }: Props) {
   const rotRef = useRef<HTMLDivElement>(null);
   const springRef = useRef<Spring | null>(null);
@@ -113,6 +116,13 @@ export default function EntryCard({
                 onClick={onTodo}
               >
                 <img src="/todo.png" alt="新增待办" draggable={false} />
+              </div>
+              <div
+                className="entry-img-btn"
+                title="新增倒计时"
+                onClick={onCountdown}
+              >
+                <img src="/countdown.png" alt="新增倒计时" draggable={false} />
               </div>
               <div
                 className="entry-img-btn"

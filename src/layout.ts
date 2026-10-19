@@ -38,10 +38,11 @@ export function spacing(size: SizeKey): number {
   return cardWidth(size) + CARD_GAP;
 }
 
-/** 卡片宽度（按类型）：普通 / 便笺 / 待办 / 便笺管理入口 */
+/** 卡片宽度（按类型）：普通 / 便笺 / 待办 / 倒计时 / 便笺管理入口 */
 export function itemWidth(kind: Item["kind"], size: SizeKey): number {
   if (kind === "note") return noteCardWidth(size);
   if (kind === "todo") return todoCardWidth(size);
+  if (kind === "countdown") return countdownCardWidth(size);
   if (kind === "entry") return entryCardWidth(size);
   return cardWidth(size);
 }
@@ -113,6 +114,17 @@ export function todoCardWidth(size: SizeKey): number {
 
 export function todoCardHeight(size: SizeKey): number {
   return Math.round(noteCardHeight(size) * 1.05);
+}
+
+// ---------- 倒计时卡片 ----------
+// 展示名称 + 内容 + 底部倒计时条：宽度与待办同口径；高度也与待办一致，
+// 倒计时条占用上方内容预览的区域（卡面不再额外加高）
+export function countdownCardWidth(size: SizeKey): number {
+  return todoCardWidth(size);
+}
+
+export function countdownCardHeight(size: SizeKey): number {
+  return todoCardHeight(size);
 }
 
 // 条带窗口高度（也是鼠标钩子判定「在条带内」的边界）。必须容得下：

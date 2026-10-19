@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import WindowDialog, { type Rect } from "./WindowDialog";
-import type { Note, Todo } from "../types";
+import type { Note, Todo, Countdown } from "../types";
 import TodoFields, { todoDraftOf } from "./TodoFields";
+import CountdownFields, {
+  countdownDraftOf,
+  formatRemaining,
+} from "./CountdownFields";
 
 function stamp(t: number): string {
   const d = new Date(t);
@@ -18,6 +22,14 @@ function todoStamp(t: Todo): string {
   return stamp(t.updatedAt);
 }
 
+/** 倒计时行的展示：截止时间 + 实时剩余（渐近：不足天不展示天） */
+function countdownStamp(c: Countdown): string {
+  const left = c.endAt - Date.now();
+  const due = stamp(c.endAt);
+  if (!c.endAt) return stamp(c.updatedAt);
+  return left <= 0 ? `${due} · 已截止` : `${due} · 剩 ${formatRemaining(left)}`;
+}
+
 /** 列表预览：取首个非空行，最多 24 字 */
 function preview(text: string): string {
   const line = (text || "").split(/\r?\n/).find((l) => l.trim().length > 0);
@@ -27,7 +39,8 @@ function preview(text: string): string {
 }
 
 // 创建时间（老数据没有 createdAt，回落到 updatedAt）
-const createdOf = (n: Note | Todo): number => n.createdAt ?? n.updatedAt ?? 0;
+const createdOf = (n: Note | Todo | Countdown): number =>
+  n.createdAt ?? n.updatedAt ?? 0;
 
 // ---------- 图标（1024 网格，fill 走 currentColor 以便跟随文字色） ----------
 const P = { fill: "currentColor" } as const;
@@ -138,18 +151,36 @@ function IconCheck() {
   );
 }
 
-type TabKey = "all" | "note" | "todo";
+/** 新增倒计时（表盘 icon，与入口卡片同款） */
+function IconCountdownNew() {
+  return (
+    <svg viewBox="0 0 1024 1024" width="14" height="14" aria-hidden>
+      <path
+        d="M512 74.666667C270.933333 74.666667 74.666667 270.933333 74.666667 512S270.933333 949.333333 512 949.333333 949.333333 753.066667 949.333333 512 753.066667 74.666667 512 74.666667z m0 810.666666c-204.8 0-373.333333-168.533333-373.333333-373.333333S307.2 138.666667 512 138.666667 885.333333 307.2 885.333333 512 716.8 885.333333 512 885.333333z"
+        {...P}
+      />
+      <path
+        d="M695.466667 567.466667l-151.466667-70.4V277.333333c0-17.066667-14.933333-32-32-32s-32 14.933333-32 32v238.933334c0 12.8 6.4 23.466667 19.2 29.866666l170.666667 81.066667c4.266667 2.133333 8.533333 2.133333 12.8 2.133333 12.8 0 23.466667-6.4 29.866666-19.2 6.4-14.933333 0-34.133333-17.066666-42.666666z"
+        {...P}
+      />
+    </svg>
+  );
+}
+
+type TabKey = "all" | "note" | "todo" | "countdown";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "note", label: "便笺" },
   { key: "todo", label: "待办" },
+  { key: "countdown", label: "限时" },
 ];
 
-/** 列表行：便笺 / 待办混排 */
+/** 列表行：便笺 / 待办 / 倒计时混排 */
 type Row =
   | { kind: "note"; note: Note }
-  | { kind: "todo"; todo: Todo };
+  | { kind: "todo"; todo: Todo }
+  | { kind: "countdown"; countdown: Countdown };
 
 /**
  * 笔记本（便笺 / 待办管理器）：左右布局。
@@ -161,9 +192,11 @@ type Row =
 export default function Notebook({
   notes,
   todos,
+  countdowns,
   onRect,
   onCreate,
   onCreateTodo,
+  onCreateCountdown,
   onHang,
   onTogglePin,
   onReorder,
@@ -176,17 +209,25 @@ export default function Notebook({
   onReorderTodo,
   onDeleteTodo,
   onEditTodo,
+  onHangCountdown,
+  onTogglePinCountdown,
+  onReorderCountdown,
+  onDeleteCountdown,
+  onEditCountdown,
   z,
   onFocus,
   onClose,
 }: {
   notes: Note[];
   todos: Todo[];
+  countdowns: Countdown[];
   onRect: (r: Rect | null) => void;
   /** 新增便笺，返回新便笺 id（用于立即选中） */
   onCreate: () => string;
   /** 新增待办，返回新待办 id（用于立即选中） */
   onCreateTodo: () => string;
+  /** 新增倒计时，返回新倒计时 id（用于立即选中） */
+  onCreateCountdown: () => string;
   onHang: (noteId: string) => void;
   onTogglePin: (noteId: string) => void;
   /** 拖拽排序：把该便笺插到展示顺序的第 index 位 */
@@ -204,14 +245,24 @@ export default function Notebook({
   onDeleteTodo: (todoId: string) => void;
   /** 右侧直接编辑待办：实时写回 */
   onEditTodo: (todoId: string, draft: ReturnType<typeof todoDraftOf>) => void;
+  onHangCountdown: (countdownId: string) => void;
+  onTogglePinCountdown: (countdownId: string) => void;
+  onReorderCountdown: (countdownId: string, index: number) => void;
+  onDeleteCountdown: (countdownId: string) => void;
+  /** 右侧直接编辑倒计时：实时写回 */
+  onEditCountdown: (
+    countdownId: string,
+    draft: ReturnType<typeof countdownDraftOf>
+  ) => void;
   z?: number;
   onFocus?: () => void;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<TabKey>("all");
-  const [selected, setSelected] = useState<{ kind: "note" | "todo"; id: string } | null>(
-    null
-  );
+  const [selected, setSelected] = useState<{
+    kind: "note" | "todo" | "countdown";
+    id: string;
+  } | null>(null);
   // 右侧编辑草稿：null = 直接显示便笺原文
   const [draft, setDraft] = useState<string | null>(null);
   // 拖拽排序
@@ -229,41 +280,63 @@ export default function Notebook({
     const g = (t: Todo) => (t.done ? 2 : t.pinned ? 0 : 1);
     return g(a) - g(b);
   });
+  // 倒计时：置顶在前，其余保持列表顺序
+  const orderedCountdowns = [...countdowns].sort((a, b) =>
+    !!a.pinned !== !!b.pinned ? (a.pinned ? -1 : 1) : 0
+  );
+
+  // 倒计时行的剩余时间是「现在」的函数：秒级心跳驱动重渲
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((v) => v + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // 当前 Tab 的行
   // - 便笺：置顶组在前，其余保持列表顺序（与原行为一致）
   // - 待办：置顶且未完成 → 未完成 → 已完成（orderedTodos 已排好）
-  // - 全部：便笺与未完成待办按创建时间穿插（置顶组在前，新的在前）
+  // - 限时：置顶组在前，其余保持列表顺序
+  // - 全部：便笺 / 未完成待办 / 倒计时按创建时间穿插（置顶组在前，新的在前）
   const rows: Row[] =
     tab === "note"
       ? orderedNotes.map((note) => ({ kind: "note", note }) as Row)
       : tab === "todo"
         ? orderedTodos.map((todo) => ({ kind: "todo", todo }) as Row)
-        : (() => {
-            const mixed: Row[] = [
-              ...orderedNotes.map((note) => ({ kind: "note", note }) as Row),
-              ...orderedTodos
-                .filter((t) => !t.done)
-                .map((todo) => ({ kind: "todo", todo }) as Row),
-            ];
-            const byCreatedDesc = (a: Row, b: Row) =>
-              createdOf(b.kind === "note" ? b.note : b.todo) -
-              createdOf(a.kind === "note" ? a.note : a.todo);
-            return [
-              ...mixed
-                .filter((r) => (r.kind === "note" ? r.note.pinned : r.todo.pinned))
-                .sort(byCreatedDesc),
-              ...mixed
-                .filter((r) => !(r.kind === "note" ? r.note.pinned : r.todo.pinned))
-                .sort(byCreatedDesc),
-            ];
-          })();
+        : tab === "countdown"
+          ? orderedCountdowns.map((countdown) => ({ kind: "countdown", countdown }) as Row)
+          : (() => {
+              const mixed: Row[] = [
+                ...orderedNotes.map((note) => ({ kind: "note", note }) as Row),
+                ...orderedTodos
+                  .filter((t) => !t.done)
+                  .map((todo) => ({ kind: "todo", todo }) as Row),
+                ...orderedCountdowns.map(
+                  (countdown) => ({ kind: "countdown", countdown }) as Row
+                ),
+              ];
+              const rowOf = (r: Row): Note | Todo | Countdown =>
+                r.kind === "note" ? r.note : r.kind === "todo" ? r.todo : r.countdown;
+              const byCreatedDesc = (a: Row, b: Row) =>
+                createdOf(rowOf(b)) - createdOf(rowOf(a));
+              return [
+                ...mixed
+                  .filter((r) => !!rowOf(r).pinned)
+                  .sort(byCreatedDesc),
+                ...mixed
+                  .filter((r) => !rowOf(r).pinned)
+                  .sort(byCreatedDesc),
+              ];
+            })();
 
   const current =
     rows.find(
       (r) =>
         r.kind === selected?.kind &&
-        (r.kind === "note" ? r.note.id === selected.id : r.todo.id === selected.id)
+        (r.kind === "note"
+          ? r.note.id === selected.id
+          : r.kind === "todo"
+            ? r.todo.id === selected.id
+            : r.countdown.id === selected.id)
     ) ?? null;
 
   // 切换 Tab：丢弃草稿与选中（选中项可能不在新 Tab 里）
@@ -281,7 +354,7 @@ export default function Notebook({
 
   // 是否可拖拽排序：全部 Tab 不排序（跨类型混排）；已完成待办不可排序
   const reorderable = (r: Row) =>
-    tab !== "all" && (r.kind === "note" || !r.todo.done);
+    tab !== "all" && (r.kind === "note" || r.kind === "countdown" || !r.todo.done);
 
   const onHandleDown = (e: React.PointerEvent, id: string) => {
     if (e.button !== 0) return;
@@ -318,6 +391,7 @@ export default function Notebook({
     setDropAt(null);
     if (!d || at == null) return;
     if (tab === "todo") onReorderTodo(d.id, at);
+    else if (tab === "countdown") onReorderCountdown(d.id, at);
     else onReorder(d.id, at);
   };
 
@@ -352,6 +426,15 @@ export default function Notebook({
             <IconTodoNew />
             新增待办
           </button>
+          {/* 倒计时按钮：同款样式（表盘 icon） */}
+          <button
+            className="wdlg-btn wdlg-wide"
+            onClick={() => setSelected({ kind: "countdown", id: onCreateCountdown() })}
+            title="新增倒计时"
+          >
+            <IconCountdownNew />
+            新增倒计时
+          </button>
         </>
       }
     >
@@ -373,14 +456,28 @@ export default function Notebook({
           </div>
           {rows.length === 0 && (
             <div className="nb-empty">
-              {tab === "todo" ? "还没有待办" : "还没有便笺"}
+              {tab === "todo"
+                ? "还没有待办"
+                : tab === "countdown"
+                  ? "还没有倒计时"
+                  : "还没有便笺"}
             </div>
           )}
           {rows.map((r, i) => {
             const isNote = r.kind === "note";
-            const id = isNote ? r.note.id : r.todo.id;
-            const pinned = isNote ? !!r.note.pinned : !!r.todo.pinned;
-            const done = !isNote && r.todo.done;
+            const isTodo = r.kind === "todo";
+            const isCountdown = r.kind === "countdown";
+            const id = isNote
+              ? r.note.id
+              : isTodo
+                ? r.todo.id
+                : r.countdown.id;
+            const pinned = isNote
+              ? !!r.note.pinned
+              : isTodo
+                ? !!r.todo.pinned
+                : !!r.countdown.pinned;
+            const done = isTodo && r.todo.done;
             const canDrag = reorderable(r);
             return (
               <div
@@ -414,7 +511,7 @@ export default function Notebook({
                   // 占位：全部 Tab / 已完成待办不支持拖拽，保持行首对齐
                   <span className="nb-grip empty" />
                 )}
-                {!isNote && (
+                {!isNote && isTodo && (
                   <button
                     className={"nb-check" + (done ? " on" : "")}
                     title={done ? "取消完成" : "完成待办"}
@@ -430,15 +527,28 @@ export default function Notebook({
                 <div className="nb-row-main">
                   <div className="nb-row-text">
                     {tab === "all" && (
-                      <span className={"nb-kind" + (isNote ? "" : " todo")}>
-                        {isNote ? "便笺" : "待办"}
+                      <span
+                        className={
+                          "nb-kind" +
+                          (isNote ? "" : isTodo ? " todo" : " countdown")
+                        }
+                      >
+                        {isNote ? "便笺" : isTodo ? "待办" : "限时"}
                       </span>
                     )}
                     {pinned && <span className="nb-pin-mark">置顶</span>}
-                    {isNote ? preview(r.note.text) : r.todo.title || "（无标题）"}
+                    {isNote
+                      ? preview(r.note.text)
+                      : isTodo
+                        ? r.todo.title || "（无标题）"
+                        : r.countdown.title || "（无标题）"}
                   </div>
                   <div className="nb-row-time">
-                    {isNote ? stamp(r.note.updatedAt) : todoStamp(r.todo)}
+                    {isNote
+                      ? stamp(r.note.updatedAt)
+                      : isTodo
+                        ? todoStamp(r.todo)
+                        : countdownStamp(r.countdown)}
                   </div>
                 </div>
                 <div className="nb-row-ops">
@@ -450,7 +560,8 @@ export default function Notebook({
                       onClick={(e) => {
                         e.stopPropagation();
                         if (isNote) onTogglePin(id);
-                        else onTogglePinTodo(id);
+                        else if (isTodo) onTogglePinTodo(id);
+                        else onTogglePinCountdown(id);
                       }}
                     >
                       <IconPin />
@@ -464,7 +575,8 @@ export default function Notebook({
                       onClick={(e) => {
                         e.stopPropagation();
                         if (isNote) onHang(id);
-                        else onHangTodo(id);
+                        else if (isTodo) onHangTodo(id);
+                        else onHangCountdown(id);
                       }}
                     >
                       <IconHang />
@@ -477,7 +589,8 @@ export default function Notebook({
                     onClick={(e) => {
                       e.stopPropagation();
                       if (isNote) onDelete(id);
-                      else onDeleteTodo(id);
+                      else if (isTodo) onDeleteTodo(id);
+                      else onDeleteCountdown(id);
                     }}
                   >
                     <IconTrash />
@@ -494,6 +607,13 @@ export default function Notebook({
                 <TodoFields
                   value={todoDraftOf(current.todo)}
                   onChange={(d) => onEditTodo(current.todo.id, d)}
+                />
+              </div>
+            ) : current.kind === "countdown" ? (
+              <div className="nb-todo-edit">
+                <CountdownFields
+                  value={countdownDraftOf(current.countdown)}
+                  onChange={(d) => onEditCountdown(current.countdown.id, d)}
                 />
               </div>
             ) : (
@@ -515,7 +635,9 @@ export default function Notebook({
               <div className="nb-ph-text">
                 {tab === "todo"
                   ? "请选择待办，若无待办点击顶部新增按钮创建"
-                  : "请选择便笺或待办，若无内容点击顶部新增按钮创建"}
+                  : tab === "countdown"
+                    ? "请选择倒计时，若无内容点击顶部新增按钮创建"
+                    : "请选择便笺或待办，若无内容点击顶部新增按钮创建"}
               </div>
             </div>
           )}

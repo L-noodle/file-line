@@ -34,11 +34,24 @@ export interface Todo {
   pinned?: boolean;
 }
 
+/** 倒计时：带截止时间的事项，卡片底部实时倒数。与待办一样，独立于绳上的卡片 */
+export interface Countdown {
+  id: string;
+  title: string;
+  text: string; // 内容
+  /** 截止时间（ms 时间戳；0 = 未设置） */
+  endAt: number;
+  updatedAt: number;
+  createdAt?: number;
+  /** 置顶 */
+  pinned?: boolean;
+}
+
 export interface Item {
   id: string;
   path: string;
   name: string;
-  kind: "image" | "folder" | "file" | "note" | "entry" | "todo";
+  kind: "image" | "folder" | "file" | "note" | "entry" | "todo" | "countdown";
   thumb?: ThumbInfo;
   tilt: number; // 固定随机倾斜（±2.5°）
   index: number; // 挂上顺序
@@ -49,4 +62,6 @@ export interface Item {
   text?: string;
   /** 待办卡片关联的待办 id（kind === "todo" 时必有） */
   todoId?: string;
+  /** 倒计时卡片关联的倒计时 id（kind === "countdown" 时必有） */
+  countdownId?: string;
 }

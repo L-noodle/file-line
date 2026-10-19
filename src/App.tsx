@@ -11,6 +11,8 @@ import NoteEditor from "./components/NoteEditor";
 import TodoEditor from "./components/TodoEditor";
 import TodoDetail from "./components/TodoDetail";
 import TodoReminder from "./components/TodoReminder";
+import CountdownEditor from "./components/CountdownEditor";
+import CountdownCard from "./components/CountdownCard";
 import Notebook from "./components/Notebook";
 import EntryCard from "./components/EntryCard";
 import OverflowFan from "./components/OverflowFan";
@@ -18,7 +20,12 @@ import ContextMenu, { MenuState } from "./components/ContextMenu";
 import HelpDialog from "./components/HelpDialog";
 import type { Rect } from "./components/WindowDialog";
 import { emptyTodoDraft, todoDraftOf, type TodoDraft } from "./components/TodoFields";
-import type { Item, Note, Todo } from "./types";
+import {
+  emptyCountdownDraft,
+  countdownDraftOf,
+  type CountdownDraft,
+} from "./components/CountdownFields";
+import type { Item, Note, Todo, Countdown } from "./types";
 import { api } from "./api";
 import type { NoteFile } from "./api";
 import {
@@ -31,6 +38,8 @@ import {
   NAME_SECOND_LINE,
   noteCardHeight,
   noteCardWidth,
+  countdownCardHeight,
+  countdownCardWidth,
   panelHeight,
   photoMaxHeight,
   PIN_ABOVE,
@@ -57,6 +66,8 @@ let noteSeq = 1;
 const nextNoteId = () => `n${Date.now().toString(36)}-${noteSeq++}`;
 let todoSeq = 1;
 const nextTodoId = () => `t${Date.now().toString(36)}-${todoSeq++}`;
+let countdownSeq = 1;
+const nextCountdownId = () => `cd${Date.now().toString(36)}-${countdownSeq++}`;
 
 // ---------- 待办提醒调度 ----------
 type ReminderKind = "start" | "end";
@@ -128,6 +139,16 @@ export default function App() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const todosRef = useRef<Todo[]>([]);
   todosRef.current = todos;
+  // ---------- 倒计时 ----------
+  const [countdowns, setCountdowns] = useState<Countdown[]>([]);
+  const countdownsRef = useRef<Countdown[]>([]);
+  countdownsRef.current = countdowns;
+  // 倒计时编辑弹窗（可同时开多个；同一倒计时只开一个，重复触发就是置顶）
+  const [countdownEditors, setCountdownEditors] = useState<
+    { countdownId: string; cardId: string; draft: CountdownDraft; creating: boolean }[]
+  >([]);
+  const countdownEditorsRef = useRef(countdownEditors);
+  countdownEditorsRef.current = countdownEditors;
   // 待办编辑弹窗（可同时开多个；同一待办只开一个，重复触发就是置顶）
   const [todoEditors, setTodoEditors] = useState<
     { todoId: string; cardId: string; draft: TodoDraft; creating: boolean }[]
@@ -163,6 +184,7 @@ export default function App() {
   }, []);
   const editorKey = (noteId: string) => `editor:${noteId}`;
   const todoEditorKey = (todoId: string) => `todo-editor:${todoId}`;
+  const countdownEditorKey = (countdownId: string) => `countdown-editor:${countdownId}`;
   const TODO_DETAIL_KEY = "todo-detail";
   const NOTEBOOK_KEY = "notebook";
   // 便笺 / 笔记本弹窗矩形（按 id 分开存，两个弹窗可同时打开）
@@ -236,6 +258,7 @@ export default function App() {
     helpOpen ||
     editors.length > 0 ||
     todoEditors.length > 0 ||
+    countdownEditors.length > 0 ||
     todoDetailId != null ||
     notebookOpen;
   const anyModalRef = useRef(false);
@@ -258,6 +281,10 @@ export default function App() {
     window.clearTimeout(animTimer.current);
   }, []);
 
+  // 提醒消息是否还在展示（绳子收起时窗口不能藏——消息要继续显示）
+  const reminderRef = useRef(false);
+  reminderRef.current = !!reminder;
+
   const hideNow = useCallback(() => {
     if (!revealedRef.current) return;
     cancelHide();
@@ -266,6 +293,12 @@ export default function App() {
     // 等滑出动画结束后隐藏窗口
     animTimer.current = window.setTimeout(() => {
       if (revealedRef.current) return; // 期间又被唤起
+      // 提醒还在展示：只收起绳子（复位顶部触发），窗口保持全屏
+      // 显示（消息可继续点/拖/稍后/关闭）
+      if (reminderRef.current) {
+        api.collapseRopeKeepWindow().catch(console.error);
+        return;
+      }
       api.hideRope().catch(console.error);
     }, ANIM_MS);
   }, [cancelHide]);
@@ -308,7 +341,17 @@ export default function App() {
       setReminder(t);
       setSnoozeMin(5);
       cancelHide();
-      // 绳子未唤出：只把窗口显示出来（不唤出绳子），消息独立展示
+      // 绳子未唤出：只把窗口显示出来（不唤出绳子），消息独立展示。
+      // 窗口临时全屏化（同弹窗 anyModal 的处理）：条带窗口太矮，消息
+      // 在顶部 40px 处会被截断；全屏后逻辑坐标=屏幕坐标，消息还能拖
+      (async () => {
+        const mon = await currentMonitor();
+        const win = getCurrentWindow();
+        if (mon) {
+          await win.setPosition(mon.position);
+          await win.setSize(mon.size);
+        }
+      })().catch(console.error);
       if (!revealedRef.current) api.showReminderWindow().catch(console.error);
     },
     [cancelHide]
@@ -318,7 +361,11 @@ export default function App() {
   const closeReminder = useCallback(() => {
     setReminder(null);
     setSnoozes([]);
-    if (!revealedRef.current) api.hideRope().catch(console.error);
+    if (!revealedRef.current) {
+      // 绳子未唤出：隐藏窗口（hide_rope 内部会先缩回条带高度）
+      api.hideRope().catch(console.error);
+    }
+    // 绳子已唤出：窗口保持全屏（收绳流程 hideNow / collapse 分支处理）
   }, []);
 
   /** 稍后 N 分钟再次提醒（N 可改，且换算后的时刻不超过结束时间） */
@@ -434,14 +481,29 @@ export default function App() {
           : [];
         setTodos(loadedTodos);
         todosRef.current = loadedTodos;
+        // 倒计时同样先于卡片载入
+        const loadedCountdowns: Countdown[] = Array.isArray(st.countdowns)
+          ? st.countdowns.map((c) => ({
+              id: c.id,
+              title: c.title ?? "",
+              text: c.text ?? "",
+              endAt: c.endAt ?? 0,
+              updatedAt: c.updatedAt ?? 0,
+              createdAt: c.createdAt ?? c.updatedAt ?? 0,
+              pinned: !!c.pinned,
+            }))
+          : [];
+        setCountdowns(loadedCountdowns);
+        countdownsRef.current = loadedCountdowns;
         if (Array.isArray(st.items)) {
           for (const it of st.items) {
-            // 兼容三种落盘形态：便笺 / 待办卡片只有 id，文件卡片有 path
+            // 兼容落盘形态：便笺 / 待办 / 倒计时卡片只有 id，文件卡片有 path
             const it0 = it as {
               path?: string;
               source?: string;
               noteId?: string;
               todoId?: string;
+              countdownId?: string;
             };
             if (it0.noteId) {
               const n = loaded.find((x) => x.id === it0.noteId);
@@ -449,6 +511,9 @@ export default function App() {
             } else if (it0.todoId) {
               const t = loadedTodos.find((x) => x.id === it0.todoId);
               addTodoCard(it0.todoId, t?.title ?? "");
+            } else if (it0.countdownId) {
+              const c = loadedCountdowns.find((x) => x.id === it0.countdownId);
+              addCountdownCard(it0.countdownId, c?.title ?? "");
             } else if (typeof it0.path === "string" && it0.path) {
               await addItem(it0.path, it0.source === "drag" ? "drag" : "clip");
             }
@@ -498,6 +563,10 @@ export default function App() {
     // 托盘菜单「新增待办」：新建待办（挂卡片 + 编辑窗）
     const un12 = listen("tray-new-todo", () => {
       createTodo();
+    });
+    // 托盘菜单「新增倒计时」：新建倒计时（挂卡片 + 编辑窗）
+    const un13 = listen("tray-new-countdown", () => {
+      createCountdown();
     });
     // 托盘菜单「打开笔记本」：唤出绳子并打开便笺管理器
     const un11 = listen("tray-open-notebook", () => {
@@ -622,6 +691,7 @@ export default function App() {
       un10.then((f) => f());
       un11.then((f) => f());
       un12.then((f) => f());
+      un13.then((f) => f());
       window.removeEventListener("card-drag-start", onDragStart);
       window.removeEventListener("card-drag-end", onDragEnd);
       window.removeEventListener("resize", onResize);
@@ -698,6 +768,40 @@ export default function App() {
     setTodos((prev) => [todo, ...prev]);
     todosRef.current = [todo, ...todosRef.current];
     return todo.id;
+  }, []);
+
+  /** 把倒计时挂到绳子上（笔记本里可重复挂起，同一倒计时可有多张卡片） */
+  const addCountdownCard = useCallback((countdownId: string, title: string) => {
+    const item: Item = {
+      id: nextId(),
+      path: "",
+      name: title || "倒计时",
+      kind: "countdown",
+      tilt: (Math.random() * 2 - 1) * 2.5,
+      index: seq,
+      source: "clip",
+      countdownId,
+    };
+    setItems((prev) => [...prev, item]);
+    // 新卡片进绳：回到最右端（最新）
+    setScrollPx(0);
+    return item;
+  }, []);
+
+  /** 新建倒计时（返回 id，便于笔记本立即选中） */
+  const newCountdown = useCallback(() => {
+    const now = Date.now();
+    const c: Countdown = {
+      id: nextCountdownId(),
+      title: "",
+      text: "",
+      endAt: 0,
+      updatedAt: now,
+      createdAt: now,
+    };
+    setCountdowns((prev) => [c, ...prev]);
+    countdownsRef.current = [c, ...countdownsRef.current];
+    return c.id;
   }, []);
 
   const addItem = useCallback(async (path: string, source: "drag" | "clip") => {
@@ -808,6 +912,40 @@ export default function App() {
       openTodoEditor(t.id, "", todoDraftOf(t), false);
     },
     [openTodoEditor]
+  );
+
+  /** 打开倒计时编辑窗：同一倒计时已开着就只置顶，不重复开窗 */
+  const openCountdownEditor = useCallback(
+    (countdownId: string, cardId: string, draft: CountdownDraft, creating: boolean) => {
+      cancelHide();
+      bringToFront(countdownEditorKey(countdownId));
+      setCountdownEditors((prev) =>
+        prev.some((e) => e.countdownId === countdownId)
+          ? prev
+          : [...prev, { countdownId, cardId, draft, creating }]
+      );
+    },
+    [bringToFront, cancelHide]
+  );
+
+  /** 新建倒计时：先建一条，再挂一张卡片到绳上，同时弹出编辑窗 */
+  const createCountdown = useCallback(() => {
+    cancelHide();
+    const id = newCountdown();
+    const item = addCountdownCard(id, "");
+    reveal();
+    openCountdownEditor(id, item.id, emptyCountdownDraft(), true);
+    return id;
+  }, [addCountdownCard, cancelHide, newCountdown, openCountdownEditor, reveal]);
+
+  /** 双击倒计时卡片 / 菜单「编辑倒计时」：打开编辑窗 */
+  const editCountdownCard = useCallback(
+    (countdownId: string) => {
+      const c = countdownsRef.current.find((x) => x.id === countdownId);
+      if (!c) return;
+      openCountdownEditor(c.id, "", countdownDraftOf(c), false);
+    },
+    [openCountdownEditor]
   );
 
   /** 双击便笺卡片 / 菜单「编辑便笺」：打开编辑窗 */
@@ -1075,7 +1213,146 @@ export default function App() {
   }, []);
 
   /** 待办编辑结束（失焦）：刷新修改时间 */
-  // 持久化（卡片 / 便笺 / 待办变化时）。初始状态读完前不回写，避免空数据覆盖磁盘。
+  // ---------- 倒计时 ----------
+  /** 打勾：草稿写回倒计时与绳上所有引用它的卡片（卡片只存标题） */
+  const submitCountdown = useCallback(
+    (countdownId: string, draft: CountdownDraft) => {
+      const ed = countdownEditorsRef.current.find((e) => e.countdownId === countdownId);
+      setCountdownEditors((prev) => prev.filter((e) => e.countdownId !== countdownId));
+      if (!ed) return;
+      if (
+        !draft.title.trim() &&
+        !draft.text.trim() &&
+        !draft.endAt &&
+        ed.creating
+      ) {
+        // 新建却什么都没填：连卡片带倒计时一起丢弃，不留垃圾
+        removeItems([ed.cardId]);
+        setCountdowns((prev) => prev.filter((c) => c.id !== ed.countdownId));
+        return;
+      }
+      setCountdowns((prev) =>
+        prev.map((c) =>
+          c.id === ed.countdownId
+            ? { ...c, ...draft, title: draft.title.trim(), updatedAt: Date.now() }
+            : c
+        )
+      );
+      setItems((prev) =>
+        prev.map((i) =>
+          i.countdownId === ed.countdownId
+            ? { ...i, name: draft.title.trim() || "倒计时" }
+            : i
+        )
+      );
+    },
+    [removeItems]
+  );
+
+  /** 关闭编辑窗：新建且一个字没填 → 连卡片带倒计时丢弃，不留空壳 */
+  const closeCountdownEditor = useCallback(
+    (countdownId: string, draft: CountdownDraft) => {
+      const ed = countdownEditorsRef.current.find((e) => e.countdownId === countdownId);
+      setCountdownEditors((prev) =>
+        prev.filter((e) => e.countdownId !== countdownId)
+      );
+      if (
+        ed?.creating &&
+        !draft.title.trim() &&
+        !draft.text.trim() &&
+        !draft.endAt
+      ) {
+        removeItems([ed.cardId]);
+        setCountdowns((prev) => prev.filter((c) => c.id !== ed.countdownId));
+      }
+    },
+    [removeItems]
+  );
+
+  /** 置顶 / 取消置顶 */
+  const togglePinCountdown = useCallback((countdownId: string) => {
+    setCountdowns((prev) =>
+      prev.map((c) => (c.id === countdownId ? { ...c, pinned: !c.pinned } : c))
+    );
+  }, []);
+
+  /** 笔记本里拖拽排序：把该倒计时插到展示顺序的第 index 位（只允许同组内移动） */
+  const reorderCountdown = useCallback((countdownId: string, target: number) => {
+    setCountdowns((prev) => {
+      const ordered = [...prev].sort((a, b) =>
+        !!a.pinned !== !!b.pinned ? (a.pinned ? -1 : 1) : 0
+      );
+      const from = ordered.findIndex((c) => c.id === countdownId);
+      if (from < 0) return prev;
+      const moved = ordered[from];
+      const pinnedCount = ordered.filter((c) => c.pinned).length;
+      // 置顶组占 [0, pinnedCount)，普通组占 [pinnedCount, len)
+      const lo = moved.pinned ? 0 : pinnedCount;
+      const hi = moved.pinned ? pinnedCount : ordered.length;
+      const to = Math.max(lo, Math.min(hi, target));
+      if (to === from || to === from + 1) return prev;
+      const next = ordered.slice();
+      next.splice(from, 1);
+      next.splice(to > from ? to - 1 : to, 0, moved);
+      return next;
+    });
+  }, []);
+
+  /** 笔记本 → 挂起（支持重复挂起） */
+  const hangCountdown = useCallback(
+    (countdownId: string) => {
+      const c = countdownsRef.current.find((x) => x.id === countdownId);
+      if (!c) return;
+      addCountdownCard(countdownId, c.title);
+      reveal();
+      showToast("已挂到绳子上");
+    },
+    [addCountdownCard, reveal, showToast]
+  );
+
+  /** 笔记本 → 删除（二次确认：绳上卡片一起删） */
+  const deleteCountdown = useCallback(
+    async (countdownId: string) => {
+      const ok = await confirm(
+        "删除后，绳子上挂着的该倒计时卡片也会一起删除。是否继续？",
+        {
+          title: "删除倒计时",
+          kind: "warning",
+          okLabel: "删除",
+          cancelLabel: "取消",
+        }
+      );
+      if (!ok) return;
+      const ids = itemsRef.current
+        .filter((i) => i.countdownId === countdownId)
+        .map((i) => i.id);
+      if (ids.length > 0) removeItems(ids);
+      setCountdownEditors((prev) =>
+        prev.filter((e) => e.countdownId !== countdownId)
+      );
+      setCountdowns((prev) => prev.filter((c) => c.id !== countdownId));
+    },
+    [removeItems]
+  );
+
+  /** 笔记本右侧直接编辑倒计时：实时写回倒计时与绳上卡片（标题同步到卡片） */
+  const editCountdownDraft = useCallback(
+    (countdownId: string, draft: CountdownDraft) => {
+      setCountdowns((prev) =>
+        prev.map((c) => (c.id === countdownId ? { ...c, ...draft } : c))
+      );
+      setItems((prev) =>
+        prev.map((i) =>
+          i.countdownId === countdownId
+            ? { ...i, name: draft.title.trim() || "倒计时" }
+            : i
+        )
+      );
+    },
+    []
+  );
+
+  // 持久化（卡片 / 便笺 / 待办 / 倒计时变化时）。初始状态读完前不回写，避免空数据覆盖磁盘。
   useEffect(() => {
     if (!loadedRef.current) return;
     api
@@ -1085,13 +1362,16 @@ export default function App() {
             ? { noteId: i.noteId }
             : i.kind === "todo" && i.todoId
               ? { todoId: i.todoId }
-              : { path: i.path, source: i.source }
+              : i.kind === "countdown" && i.countdownId
+                ? { countdownId: i.countdownId }
+                : { path: i.path, source: i.source }
         ),
         notes,
-        todos
+        todos,
+        countdowns
       )
       .catch(console.error);
-  }, [items, notes, todos]);
+  }, [items, notes, todos, countdowns]);
 
   // ---------- 菜单 ----------
   const openCardMenu = (e: React.MouseEvent, item: Item) => {
@@ -1103,6 +1383,7 @@ export default function App() {
     const rightIds = items.slice(idx + 1).map((i) => i.id);
     const isNote = item.kind === "note";
     const isTodo = item.kind === "todo";
+    const isCountdown = item.kind === "countdown";
     const todo = isTodo
       ? todosRef.current.find((t) => t.id === item.todoId)
       : undefined;
@@ -1110,7 +1391,7 @@ export default function App() {
       x: e.clientX,
       y: e.clientY,
       items: [
-        // 便笺 / 待办卡片：没有文件可打开，首项换成编辑
+        // 便笺 / 待办 / 倒计时卡片：没有文件可打开，首项换成编辑
         ...(isNote
           ? [
               {
@@ -1135,7 +1416,16 @@ export default function App() {
                   onClick: () => item.todoId && toggleTodoDone(item.todoId),
                 },
               ]
-            : [
+            : isCountdown
+              ? [
+                  {
+                    label: "编辑倒计时（双击）",
+                    bold: true,
+                    onClick: () =>
+                      item.countdownId && editCountdownCard(item.countdownId),
+                  },
+                ]
+              : [
               {
                 label: "打开（双击）",
                 onClick: () => api.openPath(item.path).catch(console.error),
@@ -1303,7 +1593,10 @@ export default function App() {
         // 窗口回到条带高度，菜单加高的记录同步作废（否则再次右键会以为还加高着）
         menuHRef.current = 0;
         menuExpandedRef.current = false;
-        invoke("window_resized").catch(console.error);
+        // 提醒消息还在展示：窗口保持全屏（条带高度会截断消息）
+        if (!reminderRef.current) {
+          invoke("window_resized").catch(console.error);
+        }
       }
       scheduleHide();
     }
@@ -1397,6 +1690,14 @@ export default function App() {
       createTodo();
     },
     [createTodo, stopEntryClick]
+  );
+
+  const onCountdownEntryClick = useCallback(
+    (e: React.MouseEvent) => {
+      stopEntryClick(e);
+      createCountdown();
+    },
+    [createCountdown, stopEntryClick]
   );
 
   // 入口卡片右图（笔记本）：打开便笺管理器
@@ -1536,6 +1837,9 @@ export default function App() {
       // 待办卡片：与便笺同宽，高度矮一档，同口径算命中区
       const todoW = todoCardWidth(size) * WIDE_DOCK_MAX + 16;
       const todoH = 26 + todoCardHeight(size) * WIDE_DOCK_MAX + 36;
+      // 倒计时卡片：与待办同宽，高度再留出倒计时条
+      const countdownW = countdownCardWidth(size) * WIDE_DOCK_MAX + 16;
+      const countdownH = 26 + countdownCardHeight(size) * WIDE_DOCK_MAX + 36;
       // 入口卡片：与便笺卡片同宽、同口径算命中区
       const entryW = entryCardWidth(size) * WIDE_DOCK_MAX + 16;
       const entryH = 26 + entryCardHeight(size) * WIDE_DOCK_MAX + 36;
@@ -1547,17 +1851,21 @@ export default function App() {
             ? noteW
             : v.item.kind === "todo"
               ? todoW
-              : v.item.kind === "entry"
-                ? entryW
-                : cardW;
+              : v.item.kind === "countdown"
+                ? countdownW
+                : v.item.kind === "entry"
+                  ? entryW
+                  : cardW;
         const h =
           v.item.kind === "note"
             ? noteH
             : v.item.kind === "todo"
               ? todoH
-              : v.item.kind === "entry"
-                ? entryH
-                : cardH;
+              : v.item.kind === "countdown"
+                ? countdownH
+                : v.item.kind === "entry"
+                  ? entryH
+                  : cardH;
         rects.push([cx - w / 2, y - 4, w, h]);
       }
       if (folded.length > 0) {
@@ -1672,6 +1980,7 @@ export default function App() {
 
   // 待办卡片渲染用的查找表（按 id）
   const todoMap = new Map(todos.map((t) => [t.id, t]));
+  const countdownMap = new Map(countdowns.map((c) => [c.id, c]));
   // 当前提醒对应的待办（绳子未唤出时也能算「稍后」上限）
   const remTodo = reminder ? todoMap.get(reminder.todoId) ?? null : null;
   const remMaxSnooze = remTodo?.endAt
@@ -1722,6 +2031,7 @@ export default function App() {
             onNote={onNoteEntryClick}
             onTodo={onTodoEntryClick}
             onNotebook={onNotebookEntryClick}
+            onCountdown={onCountdownEntryClick}
           />
         ) : item.kind === "note" ? (
           <NoteCard
@@ -1758,6 +2068,27 @@ export default function App() {
                   toggleTodoDone(tid);
                   removeItems([cid]);
                 }}
+                onContextMenu={openCardMenu}
+                onRemove={(id) => removeItems([id])}
+                falling={fallingIds.includes(item.id)}
+              />
+            );
+          })()
+        ) : item.kind === "countdown" ? (
+          (() => {
+            const countdown = countdownMap.get(item.countdownId ?? "");
+            if (!countdown) return null;
+            return (
+              <CountdownCard
+                key={item.id}
+                item={item}
+                countdown={countdown}
+                width={width}
+                size={size}
+                x={x}
+                reorder={isReorder}
+                onPinDown={startReorder}
+                onEdit={(it) => it.countdownId && editCountdownCard(it.countdownId)}
                 onContextMenu={openCardMenu}
                 onRemove={(id) => removeItems([id])}
                 falling={fallingIds.includes(item.id)}
@@ -1802,6 +2133,17 @@ export default function App() {
           onFocus={() => bringToFront(todoEditorKey(ed.todoId))}
         />
       ))}
+      {countdownEditors.map((ed) => (
+        <CountdownEditor
+          key={ed.countdownId}
+          initial={ed.draft}
+          onRect={editorRectFor(`countdown-${ed.countdownId}`)}
+          onSubmit={(d) => submitCountdown(ed.countdownId, d)}
+          onClose={(d) => closeCountdownEditor(ed.countdownId, d)}
+          z={zMap[countdownEditorKey(ed.countdownId)] ?? 0}
+          onFocus={() => bringToFront(countdownEditorKey(ed.countdownId))}
+        />
+      ))}
       {todoDetailId && todoMap.has(todoDetailId) && (
         <TodoDetail
           todo={todoMap.get(todoDetailId)!}
@@ -1816,9 +2158,11 @@ export default function App() {
         <Notebook
           notes={notes}
           todos={todos}
+          countdowns={countdowns}
           onRect={notebookRect}
           onCreate={createNote}
           onCreateTodo={createTodo}
+          onCreateCountdown={createCountdown}
           onHang={hangNote}
           onTogglePin={togglePin}
           onReorder={reorderNote}
@@ -1831,6 +2175,11 @@ export default function App() {
           onReorderTodo={reorderTodo}
           onDeleteTodo={deleteTodo}
           onEditTodo={editTodoDraft}
+          onHangCountdown={hangCountdown}
+          onTogglePinCountdown={togglePinCountdown}
+          onReorderCountdown={reorderCountdown}
+          onDeleteCountdown={deleteCountdown}
+          onEditCountdown={editCountdownDraft}
           z={zMap[NOTEBOOK_KEY] ?? 0}
           onFocus={() => bringToFront(NOTEBOOK_KEY)}
           onClose={() => setNotebookOpen(false)}

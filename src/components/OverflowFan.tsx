@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import type { Item } from "../types";
 import {
   cardWidth,
+  countdownCardHeight,
   noteCardHeight,
   photoMaxHeight,
   todoCardHeight,
@@ -41,17 +42,19 @@ export default function OverflowFan({
           const ang = angles[(stack.length - 1 - i) % angles.length];
           // 便笺预览：纸面高度固定为绳上便笺卡的高度（--fan-h 传给 CSS），
           // 不随文字长短伸缩；待办卡同理（只展示标题）；其余卡片维持内容自适应
-          const isWide = it.kind === "note" || it.kind === "todo";
+          const isWide = it.kind === "note" || it.kind === "todo" || it.kind === "countdown";
           const fanH =
             it.kind === "note"
               ? noteCardHeight(size)
               : it.kind === "todo"
                 ? todoCardHeight(size)
-                : 0;
+                : it.kind === "countdown"
+                  ? countdownCardHeight(size)
+                  : 0;
           return (
             <div
               className={
-                "fan-card" + (isWide ? " fan-card-note" : "") + (it.kind === "todo" ? " fan-card-todo" : "")
+                "fan-card" + (isWide ? " fan-card-note" : "") + (it.kind === "todo" || it.kind === "countdown" ? " fan-card-todo" : "")
               }
               key={it.id}
               style={{

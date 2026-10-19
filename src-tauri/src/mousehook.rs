@@ -249,7 +249,7 @@ fn start_windows(app: AppHandle) {
                             // 悬停触发区：主屏最顶端 2 物理像素内（停留 1s 唤出）
                             let hover_zone = px >= 0.0 && py >= 0.0 && py <= 2.0 && px <= r.win_w * r.scale;
                             // 拖拽触发区：顶部 50 逻辑像素内，拖入即唤出
-                            let edge_zone = ly >= 0.0 && ly <= 50.0 && lx >= 0.0 && lx <= r.win_w;
+                            let edge_zone = ly >= 0.0 && ly <= 20.0 && lx >= 0.0 && lx <= r.win_w;
                             // 「拖入」手势：按下起点在顶部触发区之外（点击/拖动浏览器
                             // 标签栏、标题栏的起点都在顶部条带内，不属于拖入文件），
                             // 且从按下点已实际拖动（排除原地点击与手抖微移）
