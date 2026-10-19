@@ -1,4 +1,5 @@
 import type { Countdown } from "../types";
+import DateTimeField from "./DateTimeField";
 
 /** 倒计时编辑草稿（创建 / 编辑弹窗与笔记本右侧面板共用） */
 export interface CountdownDraft {
@@ -18,23 +19,6 @@ export const countdownDraftOf = (c: Countdown): CountdownDraft => ({
   text: c.text,
   endAt: c.endAt,
 });
-
-/** 时间戳 → datetime-local 的本地时间串（空串 = 未设置；复用待办的口径） */
-function toLocalInput(ms: number): string {
-  if (!ms) return "";
-  const d = new Date(ms);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(
-    d.getHours()
-  )}:${p(d.getMinutes())}`;
-}
-
-/** datetime-local 本地串 → 时间戳（空 / 非法 → 0） */
-function fromLocalInput(v: string): number {
-  if (!v) return 0;
-  const t = new Date(v).getTime();
-  return Number.isFinite(t) ? t : 0;
-}
 
 /**
  * 倒计时渐近展示：剩余时长 → 只保留最大的两档单位。
@@ -91,17 +75,12 @@ export default function CountdownFields({
           onKeyDown={(e) => e.stopPropagation()}
         />
       </div>
-      <div className="todo-fld-row">
-        <div className="todo-fld">
-          <span className="todo-lbl">截止日期</span>
-          <input
-            type="datetime-local"
-            className="todo-input"
-            value={toLocalInput(value.endAt)}
-            onChange={(e) => set({ endAt: fromLocalInput(e.target.value) })}
-            onKeyDown={(e) => e.stopPropagation()}
-          />
-        </div>
+      <div className="todo-fld">
+        <span className="todo-lbl">截止日期</span>
+        <DateTimeField
+          value={value.endAt}
+          onChange={(ms) => set({ endAt: ms })}
+        />
       </div>
     </div>
   );

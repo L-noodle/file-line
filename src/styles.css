@@ -1872,6 +1872,139 @@ html[data-theme="dark"] .nb-empty {
   white-space: nowrap;
 }
 
+/* ---------- 日期 + 时间选择器（待办 / 倒计时编辑弹窗共用） ----------
+   统一下拉：触发按钮 + 年/月/日/时/分五个滚动列表的面板。
+   macOS 的 WKWebView 不渲染 datetime-local 的时分列表，自绘后两端一致 */
+.dt-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(120, 96, 30, 0.3);
+  background: #fff;
+  color: #222;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.dt-trigger.empty {
+  color: #aaa;
+}
+.dt-trigger:focus {
+  border-color: #a87c10;
+  box-shadow: 0 0 0 3px rgba(168, 124, 16, 0.16);
+}
+.dt-trigger-text {
+  flex: 1;
+  min-width: 0;
+}
+.dt-chev {
+  flex: none;
+  color: #888;
+}
+/* 选择面板：portal 到 body，position: fixed，位置由组件钳制在弹窗卡片内 */
+.dt-pop {
+  position: fixed;
+  z-index: 2200;
+  width: 306px;
+  padding: 10px 10px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 96, 30, 0.32);
+  background: #fff;
+  box-shadow: 0 10px 32px rgba(60, 45, 10, 0.28);
+  user-select: none;
+}
+.dt-pop-title {
+  padding: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #333;
+  text-align: center;
+}
+.dt-cols {
+  display: flex;
+  align-items: stretch;
+  gap: 5px;
+}
+.dt-cols-sep {
+  flex: none;
+  width: 1px;
+  margin: 0 2px;
+  background: rgba(120, 96, 30, 0.16);
+}
+.dt-col {
+  flex: 1;
+  min-width: 0;
+}
+.dt-col-label {
+  display: block;
+  padding-bottom: 4px;
+  font-size: 11px;
+  color: #999;
+  text-align: center;
+}
+.dt-col-list {
+  position: relative; /* 让选中项 offsetTop 相对列表本身，供居中滚动计算 */
+  height: 132px;
+  overflow-y: auto;
+  border-radius: 8px;
+  border: 1px solid rgba(120, 96, 30, 0.18);
+  background: #fcfcfd;
+  scrollbar-width: thin;
+}
+.dt-col-list::-webkit-scrollbar {
+  width: 6px;
+}
+.dt-col-list::-webkit-scrollbar-thumb {
+  background: rgba(120, 96, 30, 0.25);
+  border-radius: 3px;
+}
+.dt-opt {
+  display: block;
+  width: 100%;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: #333;
+  text-align: center;
+  cursor: pointer;
+}
+.dt-opt:hover {
+  background: #f6efd2;
+}
+.dt-opt.on {
+  background: rgba(168, 124, 16, 0.16);
+  color: #7a5c08;
+  font-weight: 700;
+}
+.dt-pop-clear {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
+  color: #999;
+  cursor: pointer;
+}
+.dt-pop-clear:hover {
+  background: #f6efd2;
+  color: #c42b1c;
+}
+
 /* ---------- 待办详情弹窗（只展示标题和内容） ---------- */
 .todo-detail-body {
   padding: 14px 16px;

@@ -1,4 +1,5 @@
 import type { Todo } from "../types";
+import DateTimeField from "./DateTimeField";
 
 /** 待办编辑草稿（创建 / 编辑弹窗与笔记本右侧面板共用） */
 export interface TodoDraft {
@@ -30,23 +31,6 @@ export const todoDraftOf = (t: Todo): TodoDraft => ({
   remindStart: t.remindStart,
   remindEnd: t.remindEnd,
 });
-
-/** 时间戳 → datetime-local 的本地时间串（空串 = 未设置） */
-export function toLocalInput(ms: number): string {
-  if (!ms) return "";
-  const d = new Date(ms);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(
-    d.getHours()
-  )}:${p(d.getMinutes())}`;
-}
-
-/** datetime-local 本地串 → 时间戳（空 / 非法 → 0） */
-export function fromLocalInput(v: string): number {
-  if (!v) return 0;
-  const t = new Date(v).getTime();
-  return Number.isFinite(t) ? t : 0;
-}
 
 /**
  * 待办表单字段：标题 / 内容 / 开始时间 / 结束时间 / 是否重复 /
@@ -88,27 +72,19 @@ export default function TodoFields({
           onKeyDown={(e) => e.stopPropagation()}
         />
       </div>
-      <div className="todo-fld-row">
-        <div className="todo-fld">
-          <span className="todo-lbl">开始时间</span>
-          <input
-            type="datetime-local"
-            className="todo-input"
-            value={toLocalInput(value.startAt)}
-            onChange={(e) => set({ startAt: fromLocalInput(e.target.value) })}
-            onKeyDown={(e) => e.stopPropagation()}
-          />
-        </div>
-        <div className="todo-fld">
-          <span className="todo-lbl">结束时间</span>
-          <input
-            type="datetime-local"
-            className="todo-input"
-            value={toLocalInput(value.endAt)}
-            onChange={(e) => set({ endAt: fromLocalInput(e.target.value) })}
-            onKeyDown={(e) => e.stopPropagation()}
-          />
-        </div>
+      <div className="todo-fld">
+        <span className="todo-lbl">开始时间</span>
+        <DateTimeField
+          value={value.startAt}
+          onChange={(ms) => set({ startAt: ms })}
+        />
+      </div>
+      <div className="todo-fld">
+        <span className="todo-lbl">结束时间</span>
+        <DateTimeField
+          value={value.endAt}
+          onChange={(ms) => set({ endAt: ms })}
+        />
       </div>
       <div className="todo-check-row">
         <input

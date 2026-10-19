@@ -108,7 +108,8 @@ export default function WindowDialog({
     const onDown = (e: MouseEvent) => {
       if (!closeOnOutside) return;
       const t = e.target;
-      if (t instanceof Element && t.closest(".panel")) return;
+      // 面板内的点击不关；日期时间选择面板是 portal 到 body 的，也算「弹窗内」
+      if (t instanceof Element && (t.closest(".panel") || t.closest(".dt-pop"))) return;
       onClose();
     };
     const t = window.setTimeout(() => {
