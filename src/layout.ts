@@ -191,35 +191,12 @@ export function visibleCenters(
   });
 }
 
-// ---------- Dock 式邻近放大（macOS Dock 风格） ----------
-// 以鼠标 x 为中心，高斯衰减：距离 0 → 最大放大，邻居快速回落，远处不受影响。
-// SIGMA 越小衰减越陡（邻居放大越少）；RANGE 为截断半径。
-export const DOCK_MAX = 1.2; // 正下方普通卡片的最大放大倍数
-export const DOCK_RANGE = 2.5; // 影响半径（间距倍数）
-export const DOCK_SIGMA = 0.85; // 高斯衰减宽度（间距倍数）
+// ---------- 卡片悬停放大 ----------
+// 鼠标悬停在哪张卡上就放大哪张，邻居不联动。
+export const DOCK_MAX = 1.1; // 普通卡片悬停时的最大放大倍数
 
-/** 宽卡片（便笺 / 便笺管理入口）的放大上限：1.12（普通卡为 DOCK_MAX 1.2）。
+/** 宽卡片（便笺 / 待办 / 倒计时 / 入口卡）的放大上限：1.08（普通卡为 DOCK_MAX 1.15）。
  *  这份反馈不能没有：CSS :hover 在点击穿透态收不到鼠标事件，
  *  只有钩子转发的 --dock 变量能驱动动画（其它卡片的悬浮感也来自它）。
- *  上限经碰撞验证：鼠标扫过宽卡与邻居之间时两者同时放大，取全程最小边缘
- *  间隙——宽|宽 10.9 / 8.0 / 5.3px（小 / 中 / 大档），不劣于普通卡自己的
- *  11.3 / 7.0 / 2.8px；若放到 1.2，大档宽|宽仅剩 1.8px 会显得贴住，故取 1.12。 */
-export const WIDE_DOCK_MAX = 1.12;
-
-/** 高斯衰减缩放：距离 0 → max，超出 RANGE → 1。 */
-function gaussScale(dist: number, spacingPx: number, max: number): number {
-  const range = DOCK_RANGE * spacingPx;
-  if (dist >= range) return 1;
-  const sigma = DOCK_SIGMA * spacingPx;
-  const f = Math.exp(-((dist / sigma) * (dist / sigma)));
-  return 1 + (max - 1) * f;
-}
-
-export function dockScale(dist: number, spacingPx: number): number {
-  return gaussScale(dist, spacingPx, DOCK_MAX);
-}
-
-/** 宽卡片（便笺 / 入口）专用：同一节奏，上限 WIDE_DOCK_MAX。 */
-export function wideDockScale(dist: number, spacingPx: number): number {
-  return gaussScale(dist, spacingPx, WIDE_DOCK_MAX);
-}
+ *  上限压低是为了放大后不压到相邻卡片（宽卡本身放大过大会明显挤占 CARD_GAP）。 */
+export const WIDE_DOCK_MAX = 1.08;

@@ -30,9 +30,7 @@ import { api } from "./api";
 import type { NoteFile } from "./api";
 import {
   cardWidth,
-  dockScale,
   DOCK_MAX,
-  DOCK_RANGE,
   entryCardHeight,
   entryCardWidth,
   NAME_SECOND_LINE,
@@ -54,7 +52,6 @@ import {
   visibleCapacity,
   visibleCenters,
   WIDE_DOCK_MAX,
-  wideDockScale,
 } from "./layout";
 import { invoke } from "@tauri-apps/api/core";
 import { useTheme } from "./theme";
@@ -227,11 +224,11 @@ export default function App() {
   const reorderRef = useRef<{ id: string; mx: number } | null>(null);
   reorderRef.current = reorder;
   const wheelAccRef = useRef(0); // 滚轮累积量（触控板小步事件合并防抖）
-  // ---------- Dock 放大联动（Rust 钩子转发条带内鼠标位置） ----------
+  // ---------- 卡片悬停放大（Rust 钩子转发条带内鼠标位置） ----------
   const panelRef = useRef<HTMLDivElement>(null);
   const mouseRef = useRef<number | null>(null); // 条带内鼠标逻辑 x（null = 离开，全部缩回）
   const mouseYRef = useRef<number | null>(null); // 条带内鼠标逻辑 y（穿透态悬停判定用）
-  const slotsRef = useRef<{ el: HTMLElement; x: number }[]>([]); // 可见卡片 DOM + 中心 x
+  const slotsRef = useRef<{ el: HTMLElement; x: number; w: number }[]>([]); // 可见卡片 DOM + 中心 x + 宽
   const zoneBottomRef = useRef(0); // 卡片感应区底部 y（低于此不触发放大）
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef(0);
@@ -1900,27 +1897,25 @@ export default function App() {
     reminderRect,
   ]);
 
-  // ---------- Dock 放大联动（macOS Dock 风格） ----------
+  // ---------- 卡片悬停放大 ----------
   // Rust 鼠标钩子转发条带内光标位置（卡片间隙穿透，WebView 自身收不到 move），
-  // 按每张卡片中心与鼠标 x 的距离算放大倍数，直接写 CSS 变量驱动，不走 React 渲染
+  // 鼠标落在哪张卡的水平投影内就放大哪张（普通卡 DOCK_MAX，宽卡 WIDE_DOCK_MAX），
+  // 直接写 CSS 变量驱动，不走 React 渲染；邻居不联动
   const applyDock = useCallback(() => {
     const mx = mouseRef.current;
-    const sp = spacing(size);
-    const range = DOCK_RANGE * sp;
     for (const s of slotsRef.current) {
       const d = mx == null ? Infinity : Math.abs(s.x - mx);
-      // 超出影响范围清除变量（回落到 CSS 默认值 1，transition 平滑缩回）
-      if (d >= range) {
+      // 鼠标不在卡片水平范围内（含间隙）：清除变量，transition 平滑缩回
+      if (d >= s.w / 2) {
         s.el.style.removeProperty("--dock");
         s.el.style.removeProperty("--dock-wide");
       } else {
-        // 普通卡 1.2 倍；便笺 / 入口卡（更宽）走压低的上限，避免压到邻居。
         // 两个变量都写，由 CSS 按卡片类型各取所需（--dock-wide 仅宽卡读取）
-        s.el.style.setProperty("--dock", dockScale(d, sp).toFixed(4));
-        s.el.style.setProperty("--dock-wide", wideDockScale(d, sp).toFixed(4));
+        s.el.style.setProperty("--dock", DOCK_MAX.toFixed(4));
+        s.el.style.setProperty("--dock-wide", WIDE_DOCK_MAX.toFixed(4));
       }
     }
-  }, [size]);
+  }, []);
 
   // 悬停态（点击穿透态补位）：窗口未占用（命中区外）时 WebView 收不到鼠标事件，
   // CSS :hover 不触发——卡片不弹【关闭】按钮、入口图片不放大。这里用钩子转发的
@@ -1959,7 +1954,12 @@ export default function App() {
     if (!panel) return;
     slotsRef.current = Array.from(
       panel.querySelectorAll<HTMLElement>(".pegged-slot"),
-    ).map((el) => ({ el, x: parseFloat(el.dataset.x || "0") }));
+    ).map((el) => ({
+      el,
+      x: parseFloat(el.dataset.x || "0"),
+      // 各卡片组件都在内联样式写了真实卡宽 --card-w，直接读取做命中判定
+      w: parseFloat(el.style.getPropertyValue("--card-w")) || cardWidth(size),
+    }));
     applyDock();
     applyHover(); // 布局变化 / 隐藏：悬停态同步重置
   }, [items, width, size, scrollPx, revealed, applyDock, applyHover]);
