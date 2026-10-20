@@ -60,6 +60,7 @@ export const api = {
     invoke<{
       items: SavedItem[];
       size: string | null;
+      hideEntryCards?: boolean;
       notes?: SavedNote[];
       todos?: SavedTodo[];
       countdowns?: SavedCountdown[];
@@ -68,9 +69,10 @@ export const api = {
     items: SavedItem[],
     notes: SavedNote[],
     todos: SavedTodo[],
-    countdowns: SavedCountdown[]
+    countdowns: SavedCountdown[],
+    hideEntryCards: boolean
   ) =>
-    invoke<void>("save_state", { items, notes, todos, countdowns }),
+    invoke<void>("save_state", { items, notes, todos, countdowns, hideEntryCards }),
   openPath: (path: string) => invoke<void>("open_path", { path }),
   showInFolder: (path: string) => invoke<void>("show_in_folder", { path }),
   saveToFolder: (paths: string[], folder: string, notes: NoteFile[]) =>

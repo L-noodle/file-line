@@ -54,6 +54,10 @@ impl SizeKey {
 
 pub struct AppState {
     pub size: Mutex<SizeKey>,
+    /// 隐藏入口卡片开关（托盘菜单勾选态的内存事实源）。
+    /// 不能依赖菜单项 is_checked()：Windows 点击时系统会先自动翻转勾选态，
+    /// 读到的已是新值，取反会得到旧值（点了没反应）。这里显式维护并显式 set_checked
+    pub hide_entry_cards: Mutex<bool>,
 }
 
 /// 把主窗口铺满主显示器顶部。
@@ -217,6 +221,9 @@ struct Persisted {
     #[serde(default)]
     items: Vec<PersistedItem>,
     size: Option<String>,
+    /// 隐藏晾衣绳上的特殊入口卡片（便笺管理入口），托盘菜单勾选
+    #[serde(default, alias = "hideEntryCards")]
+    hide_entry_cards: bool,
     #[serde(default)]
     notes: Vec<PersistedNote>,
     #[serde(default)]
@@ -253,6 +260,7 @@ fn get_state(app: AppHandle) -> serde_json::Value {
             "countdownId": i.countdown_id(),
         })).collect::<Vec<_>>(),
         "size": p.size,
+        "hideEntryCards": p.hide_entry_cards,
         "notes": p.notes.iter().map(|n| serde_json::json!({
             "id": n.id,
             "text": n.text,
@@ -293,6 +301,7 @@ fn save_state(
     notes: Vec<PersistedNote>,
     todos: Vec<PersistedTodo>,
     countdowns: Vec<PersistedCountdown>,
+    hide_entry_cards: bool,
 ) {
     let size = app.state::<AppState>().size.lock().unwrap().as_str().to_string();
     write_state(
@@ -300,6 +309,7 @@ fn save_state(
         &Persisted {
             items,
             size: Some(size),
+            hide_entry_cards,
             notes,
             todos,
             countdowns,
@@ -660,6 +670,7 @@ pub fn run() {
         ))
         .manage(AppState {
             size: Mutex::new(SizeKey::Small),
+            hide_entry_cards: Mutex::new(false),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -687,6 +698,8 @@ pub fn run() {
             if let Some(s) = &st.size {
                 *app.state::<AppState>().size.lock().unwrap() = SizeKey::from_str(s);
             }
+            // 恢复「隐藏入口卡片」开关（托盘菜单勾选态）
+            *app.state::<AppState>().hide_entry_cards.lock().unwrap() = st.hide_entry_cards;
             place_window(app.handle());
             // 初始完全穿透，等待前端上报命中区
             if let Some(win) = app.get_webview_window("main") {
@@ -741,6 +754,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // 便笺功能入口：置顶（使用说明之上），绳子没唤出时由前端一并唤出
     let note_new = MenuItem::with_id(app, "note-new", "新增便笺", true, None::<&str>)?;
     let note_open = MenuItem::with_id(app, "note-open", "打开笔记本", true, None::<&str>)?;
+    // 隐藏入口卡片：勾选后收起晾衣绳上的特殊入口卡片（便笺管理入口）。
+    // 勾选态取内存开关（setup 时已从持久化恢复），不读 is_checked()
+    let hide_entry = CheckMenuItem::with_id(
+        app,
+        "hide-entry-cards",
+        "隐藏入口卡片",
+        true,
+        *app_state.hide_entry_cards.lock().unwrap(),
+        None::<&str>,
+    )?;
     // 待办入口：与便笺同款（新建待办 + 挂卡片 + 编辑窗）
     let todo_new = MenuItem::with_id(app, "todo-new", "新增待办", true, None::<&str>)?;
     // 倒计时入口：与待办同款（新建倒计时 + 挂卡片 + 编辑窗）
@@ -752,8 +775,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &note_new, &todo_new, &countdown_new, &note_open, &sep, &help, &sep, &size_menu,
-            &autostart, &sep, &quit,
+            &note_new, &todo_new, &countdown_new, &note_open, &hide_entry, &sep, &help, &sep,
+            &size_menu, &autostart, &sep, &quit,
         ],
     )?;
     drop(cur_size);
@@ -762,6 +785,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // 单选互斥需要持有各菜单项 handle
     let (small_h, medium_h, large_h) = (small.clone(), medium.clone(), large.clone());
     let autostart_h = autostart.clone();
+    let hide_entry_h = hide_entry.clone();
 
     // 透明背景专用托盘图标（64px 优化版，嵌入二进制）
     let tray_icon =
@@ -789,6 +813,19 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 "note-open" => {
                     // 打开笔记本（便笺管理器）
                     let _ = app.emit("tray-open-notebook", ());
+                }
+                "hide-entry-cards" => {
+                    // 隐藏入口卡片：翻转内存开关，显式落到目标勾选态
+                    // （Windows 点击时系统已自动翻转过菜单勾选态，不能读 is_checked 取反），
+                    // 再通知前端（前端负责即时收起/恢复入口卡片并持久化）
+                    let on = {
+                        let st = app.state::<AppState>();
+                        let mut cur = st.hide_entry_cards.lock().unwrap();
+                        *cur = !*cur;
+                        *cur
+                    };
+                    let _ = hide_entry_h.set_checked(on);
+                    let _ = app.emit("hide-entry-cards", on);
                 }
                 "help" => {
                     // 弹出使用说明：由前端渲染与卡片同款的弹窗

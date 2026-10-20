@@ -124,6 +124,8 @@ export default function App() {
   useTheme();
   const [items, setItems] = useState<Item[]>([]);
   const [size, setSize] = useState<SizeKey>("small");
+  // 隐藏晾衣绳上的特殊入口卡片（便笺管理入口），托盘菜单勾选后生效并持久化
+  const [hideEntry, setHideEntry] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [helpOpen, setHelpOpen] = useState(false); // 使用说明弹窗（托盘菜单触发）
@@ -447,6 +449,8 @@ export default function App() {
         ) {
           setSize(st.size);
         }
+        // 入口卡片隐藏开关（托盘菜单「隐藏入口卡片」）
+        setHideEntry(!!st.hideEntryCards);
         // 便笺先于卡片载入：便笺卡片要用便笺正文渲染
         const loaded: Note[] = Array.isArray(st.notes)
           ? st.notes.map((n) => ({
@@ -571,6 +575,14 @@ export default function App() {
       bringToFront(NOTEBOOK_KEY);
       setNotebookOpen(true);
     });
+    // 托盘菜单「隐藏入口卡片」：勾选/取消勾选即时收起/恢复绳尾入口卡片。
+    // 绳子通常正处于收起态（否则不会去点托盘），先唤出让效果当场可见
+    const un14 = listen<boolean>("hide-entry-cards", (e) => {
+      const on = !!e.payload;
+      setHideEntry(on);
+      reveal();
+      showToast(on ? "已隐藏入口卡片" : "已恢复入口卡片");
+    });
     // 鼠标进入 / 离开面板区域（驱动闲置隐藏）
     const un6 = listen<boolean>("panel-hover", (e) => {
       hoverRef.current = !!e.payload;
@@ -689,6 +701,7 @@ export default function App() {
       un11.then((f) => f());
       un12.then((f) => f());
       un13.then((f) => f());
+      un14.then((f) => f());
       window.removeEventListener("card-drag-start", onDragStart);
       window.removeEventListener("card-drag-end", onDragEnd);
       window.removeEventListener("resize", onResize);
@@ -1365,10 +1378,11 @@ export default function App() {
         ),
         notes,
         todos,
-        countdowns
+        countdowns,
+        hideEntry
       )
       .catch(console.error);
-  }, [items, notes, todos, countdowns]);
+  }, [items, notes, todos, countdowns, hideEntry]);
 
   // ---------- 菜单 ----------
   const openCardMenu = (e: React.MouseEvent, item: Item) => {
@@ -1601,8 +1615,9 @@ export default function App() {
   }, [anyModal]);
 
   // ---------- 布局（滚轮像素级回看，scrollPx=0 时最新卡片靠右） ----------
-  // 入口卡片常驻绳尾：与普通卡片共用同一套布局（可见数 / 滚动 / 折叠堆叠）
-  const allItems = [...items, entryItem];
+  // 入口卡片常驻绳尾：与普通卡片共用同一套布局（可见数 / 滚动 / 折叠堆叠）。
+  // 「隐藏入口卡片」勾选后从布局中摘除——不占容量、不渲染、不进命中区
+  const allItems = hideEntry ? items : [...items, entryItem];
   const capacity = visibleCapacity(
     allItems.map((it) => it.kind),
     width,
@@ -1895,6 +1910,7 @@ export default function App() {
     helpRect,
     dlgRects,
     reminderRect,
+    hideEntry,
   ]);
 
   // ---------- 卡片悬停放大 ----------
@@ -1962,7 +1978,7 @@ export default function App() {
     }));
     applyDock();
     applyHover(); // 布局变化 / 隐藏：悬停态同步重置
-  }, [items, width, size, scrollPx, revealed, applyDock, applyHover]);
+  }, [items, width, size, scrollPx, revealed, hideEntry, applyDock, applyHover]);
 
   useEffect(() => {
     const un = listen<[number, number] | null>("panel-mouse", (e) => {
