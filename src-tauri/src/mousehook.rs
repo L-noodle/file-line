@@ -107,6 +107,15 @@ pub fn set_override(on: bool) {
                 let _ = tx.send(Msg::Capture(true));
             }
         }
+    } else if !REVEALED.load(Ordering::SeqCst) {
+        // 面板已收起 / 隐藏：立刻恢复穿透，不等下一次鼠标事件。
+        // 否则残留的强制交互态会让「看不见」的条带继续吞掉下方窗口的
+        // 点击与拖动（升级/收起瞬间尤其容易被感知成"拖不动窗口"）
+        if CAPTURING.swap(false, Ordering::SeqCst) {
+            if let Some(tx) = TX.get() {
+                let _ = tx.send(Msg::Capture(false));
+            }
+        }
     }
 }
 
@@ -415,10 +424,13 @@ unsafe extern "system" fn hook_proc(
             // 仅在面板已唤出（REVEALED）时条带才可命中：
             // - 拖文件中（drag_file）条带内强制接收鼠标事件，否则窗口穿透
             //   会让 OLE 拖放目标解析不到 WebView2，drop 落不进来；
-            // - 卡片命中区（hit）同样门控，避免隐藏后残留的 rects 吞点击。
+            // - 卡片命中区（hit）同样门控，避免隐藏后残留的 rects 吞点击；
+            // - 强制交互（over，右键菜单 / 说明弹窗拖动）也必须门控：它可能被
+            //   异常路径残留成 true，若不受 revealed 约束，收起后的条带会一直
+            //   处于可命中状态，把下方窗口的点击与拖动整片吞掉。
             // 面板隐藏 / 收起动画期间一律穿透，顶部区域的点击与
             // 拖拽（含拖其他软件窗口）直达下方窗口
-            let capture = over || (revealed && (hit || (drag_file && in_win)));
+            let capture = revealed && (over || hit || (drag_file && in_win));
             if CAPTURING.load(Ordering::SeqCst) != capture {
                 CAPTURING.store(capture, Ordering::SeqCst);
                 if let Some(tx) = TX.get() {
@@ -587,7 +599,8 @@ fn start_macos_poll(app: AppHandle) {
             // 左键拖拽，其余区域一律透传下方窗口。不再用「面板显示即整条不可穿透」，
             // 否则绳子收起后（尤其 hover 触发把它重新唤出时）顶部整条会吞掉下方窗口的点击。
             // 卡片命中区 REGIONS.rects 由前端实时上报，这里直接复用即可做到精细穿透。
-            let capture = over || hit || (lbutton && in_win);
+            // 面板收起后（revealed=false）一律穿透，残留的强制交互态也不例外。
+            let capture = REVEALED.load(Ordering::SeqCst) && (over || hit || (lbutton && in_win));
             if CAPTURING.load(Ordering::SeqCst) != capture {
                 CAPTURING.store(capture, Ordering::SeqCst);
                 if let Some(tx) = TX.get() {
@@ -856,9 +869,10 @@ extern "C" fn cg_tap_callback(
         }
     }
 
-    // 精细穿透：仅卡片命中区 / 覆盖层 / 面板内按住左键拖拽时截点击，其余透传下方窗口
+    // 精细穿透：仅卡片命中区 / 覆盖层 / 面板内按住左键拖拽时截点击，其余透传下方窗口；
+    // 面板收起（revealed=false）后一律穿透，残留的强制交互态也不例外
     let over = OVERRIDE.load(Ordering::SeqCst);
-    let capture = over || hit || (lbutton && in_win);
+    let capture = revealed && (over || hit || (lbutton && in_win));
     if CAPTURING.load(Ordering::SeqCst) != capture {
         CAPTURING.store(capture, Ordering::SeqCst);
         tx_send(Msg::Capture(capture));

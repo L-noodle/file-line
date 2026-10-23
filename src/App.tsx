@@ -289,6 +289,17 @@ export default function App() {
     cancelHide();
     setRevealed(false);
     setHelpOpen(false); // 收起绳子时一并关闭使用说明弹窗
+    // 收起动画要 1.33s，期间窗口还在屏幕上：立刻通知 Rust 整条转穿透并复位
+    // 触发状态，避免动画期间的拖拽门控（drag_file/in_win）把下方窗口的
+    // 点击与拖动一起吞掉。提醒消息还在展示时不能这么做（消息必须可点）。
+    if (!reminderRef.current) {
+      api.collapseRope().catch(console.error);
+      // 强制交互态（右键菜单 / 说明弹窗拖动）若被异常路径残留，一并复位；
+      // 菜单还开着则保持
+      if (!menuRef.current) {
+        invoke("set_capture_override", { on: false }).catch(() => {});
+      }
+    }
     // 等滑出动画结束后隐藏窗口
     animTimer.current = window.setTimeout(() => {
       if (revealedRef.current) return; // 期间又被唤起

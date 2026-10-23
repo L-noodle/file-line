@@ -572,6 +572,36 @@ fn show_rope(app: AppHandle) {
     }
 }
 
+/// 真正把条带窗口从屏幕上撤掉（Windows 兜底）。
+///
+/// tao 的 `set_visible` 走 `WindowState::apply_diff`：算出的窗口标志与缓存一致时
+/// 直接 return（见 tao-0.37 `platform_impl/windows/window_state.rs` 的 `apply_diff`
+/// 开头 `if diff.is_empty() { return }`）。而启动预热为了让 WebView2 先渲染一次，
+/// 用裸 `ShowWindow(SW_SHOWNOACTIVATE)` 显示了窗口，绕过了 tao 的缓存 ——
+/// 缓存里 VISIBLE 仍是 false，于是随后的 `win.hide()` 是**空操作**：
+/// 收起后条带窗口（全宽、置顶、~200px 高）一直留在屏幕顶上，只能靠
+/// WS_EX_TRANSPARENT 假装不存在。一旦命中区/强制交互状态出现任何残留，
+/// 这块"看不见"的条带就会吞掉下方窗口的点击与拖动。
+///
+/// 这里先调 tao 的 `hide()`（把缓存标志同步成 false），再补一次裸 SW_HIDE，
+/// 保证无论缓存状态如何，窗口都真的从屏幕上消失且状态自洽（不会影响下次 show）。
+#[cfg(windows)]
+fn force_hide(win: &tauri::WebviewWindow) {
+    let _ = win.hide();
+    if let Ok(h) = win.hwnd() {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+        unsafe {
+            let _ = ShowWindow(HWND(h.0 as *mut _), SW_HIDE);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn force_hide(win: &tauri::WebviewWindow) {
+    let _ = win.hide();
+}
+
 /// 隐藏绳子窗口（滑出动画结束后调用）。
 #[tauri::command]
 fn hide_rope(app: AppHandle) {
@@ -581,8 +611,21 @@ fn hide_rope(app: AppHandle) {
     // 恢复条带窗口尺寸（右键菜单打开时可能临时加高过）
     place_window(&app);
     if let Some(win) = app.get_webview_window("main") {
-        let _ = win.hide();
+        force_hide(&win);
     }
+}
+
+/// 收起动画开始（不是结束）就立刻转回完全穿透。
+///
+/// 收起动画有 1.33s，这期间条带窗口仍在屏幕上：若等动画结束才 `hide_rope`，
+/// 这段时间内的拖拽（尤其"拖入文件"分支会把整条条带变成可命中）会拦住
+/// 下方窗口的点击与拖动。这里提前把 revealed 置 false 并复位触发状态，
+/// 让整条条带在整个滑出过程里都是穿透的。
+#[tauri::command]
+fn collapse_rope(app: AppHandle) {
+    let _ = app;
+    mousehook::set_revealed(false);
+    mousehook::reset_triggers();
 }
 
 /// 待办提醒展示期间绳子收起：不隐藏窗口、不缩回条带高度（提醒消息
@@ -687,6 +730,7 @@ pub fn run() {
             window_resized,
             show_rope,
             hide_rope,
+            collapse_rope,
             collapse_rope_keep_window,
             show_reminder_window,
             activate_app,
@@ -722,7 +766,10 @@ pub fn run() {
                     let _ = app2.run_on_main_thread(move || {
                         if !mousehook::is_revealed() {
                             if let Some(w) = app3.get_webview_window("main") {
-                                let _ = w.hide();
+                                // 预热用的是裸 ShowWindow，tao 缓存的 VISIBLE 仍是 false，
+                                // 这里必须走 force_hide 才能真正撤掉窗口（否则它会一直
+                                // 置顶留在屏幕顶部那片区域里）
+                                force_hide(&w);
                             }
                         }
                     });

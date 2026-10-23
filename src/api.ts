@@ -88,6 +88,8 @@ export const api = {
     scrollable: boolean
   ) => invoke<void>("set_hit_rects", { rects, panelH, scrollable }),
   showRope: () => invoke<void>("show_rope"),
+  /** 收起动画开始：立刻整条转穿透（不等动画结束才隐藏窗口） */
+  collapseRope: () => invoke<void>("collapse_rope"),
   hideRope: () => invoke<void>("hide_rope"),
   /** 待办提醒展示期间绳子收起：保持窗口显示（提醒继续展示），仅复位触发状态 */
   collapseRopeKeepWindow: () => invoke<void>("collapse_rope_keep_window"),

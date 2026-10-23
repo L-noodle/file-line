@@ -1,6 +1,6 @@
 [package]
 name = "file-line"
-version = "1.2.0"
+version = "1.2.1"
 description = "晾衣绳 — 屏幕顶部的晾衣绳挂件（Windows）"
 authors = ["you"]
 edition = "2021"
